@@ -25,9 +25,9 @@ INTERVALO_COLETA = 60
 # Gestão de Banca (Progressão 1 -> 3)
 VALOR_BASE = 1.0
 VALOR_GALE = 3.0
-LUCRO_BASE = 1.0      # Ganhou na 1ª tentativa
-LUCRO_GALE = 2.0      # Ganhou na 2ª tentativa (recupera 1+3 e lucra 2)
-PREJUIZO_DERROTA = 4.0 # Perdeu as duas (1+3)
+LUCRO_BASE = 1.0      
+LUCRO_GALE = 2.0      
+PREJUIZO_DERROTA = 4.0 
 
 # Variáveis globais de memória (RAM)
 history_numbers = []
@@ -176,7 +176,6 @@ def bot_loop():
                 if bot_state == "ACOMPANHANDO":
                     progress_count += 1
                     
-                    # Verifica se acertou a cor alvo
                     if cor == signal_color or (signal_color == "G" and cor == "V") or (signal_color == "R" and cor == "V"):
                         if progress_count == 1:
                             wins_base += 1
@@ -198,7 +197,7 @@ def bot_loop():
                         add_log(f"⏳ GALE {progress_count}: Não foi dessa vez. Aguardando próximo jogo...")
                         save_game_to_db(issue, cor, num, f"GALE {progress_count}")
                 else:
-                    # LÓGICA DE CAÇADA DAY TRADE (Intacta)
+                    # LÓGICA DE CAÇADA DAY TRADE
                     if len(history_numbers) >= 3:
                         soma_3 = sum(history_numbers[-3:])
                         last_num = history_numbers[-1]
@@ -206,13 +205,11 @@ def bot_loop():
                         
                         sinal_disparado = None
                         
-                        # Regra A: Soma 3 <= 4 -> Green
                         if soma_3 <= 4:
                             sinal_disparado = "G"
                             add_log(f"🟢 🚨 SINAL SNIPER (GREEN) 🚨 🟣")
                             add_log(f"Motivo: Soma dos últimos 3 números = {soma_3} (<= 4)")
                         
-                        # Regra B: Duplo Teto >= 7 -> Red
                         elif last_num >= 7 and prev_num >= 7:
                             sinal_disparado = "R"
                             add_log(f"🔴 🚨 SINAL SNIPER (RED) 🚨 🟣")
@@ -233,7 +230,7 @@ def bot_loop():
         time.sleep(INTERVALO_COLETA)
 
 # ==============================================================================
-# SERVIDOR WEB (FLASK) - LAYOUT PREMIUM COM MÓDULO FINANCEIRO
+# SERVIDOR WEB (FLASK) - LAYOUT FINANCEIRO COMPLETO
 # ==============================================================================
 app = Flask(__name__)
 
@@ -267,19 +264,19 @@ HTML_TEMPLATE = """
         .trend-pill { min-width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.3); flex-shrink: 0; }
         .pill-r { background: var(--red); } .pill-g { background: var(--green); } .pill-v { background: var(--purple); box-shadow: 0 0 10px var(--purple); }
 
-        .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
+        .stats-grid { display: grid; grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr 1.5fr; gap: 12px; margin-bottom: 20px; }
         .card { background: var(--bg-card); border: 1px solid var(--border); backdrop-filter: blur(12px); border-radius: 16px; padding: 15px; text-align: center; transition: all 0.4s ease; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
         .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: transparent; transition: 0.4s; }
         .card-title { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; font-weight: 600; }
-        .card-value { font-size: 26px; font-weight: 900; line-height: 1; } 
+        .card-value { font-size: 24px; font-weight: 900; line-height: 1; } 
         .win-text { color: var(--green); text-shadow: 0 0 15px rgba(0, 230, 118, 0.4); }
         .loss-text { color: var(--red); text-shadow: 0 0 15px rgba(255, 82, 82, 0.4); }
         .gale-text { color: var(--yellow); text-shadow: 0 0 15px rgba(255, 202, 40, 0.4); }
-        .profit-text { font-size: 28px; font-weight: 900; }
+        .profit-text { font-size: 26px; font-weight: 900; }
+        .rate-text { color: var(--purple); text-shadow: 0 0 20px rgba(188, 82, 255, 0.5); font-size: 26px; } 
         
-        .status-card { grid-column: span 2; }
-        .status-hunting { color: var(--yellow); font-size: 18px; font-weight: 700; }
-        .status-accompanying { font-size: 18px; font-weight: 700; }
+        .status-hunting { color: var(--yellow); font-size: 16px; font-weight: 700; }
+        .status-accompanying { font-size: 16px; font-weight: 700; }
         .signal-green { color: var(--green); text-shadow: 0 0 15px var(--green); }
         .signal-red { color: var(--red); text-shadow: 0 0 15px var(--red); }
         .card-hunting::before { background: var(--yellow); } .card-active { border-color: var(--purple); } .card-active::before { background: var(--purple); }
@@ -297,9 +294,10 @@ HTML_TEMPLATE = """
 
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(3, 1fr); }
-            .status-card { grid-column: span 3; }
+            .stats-grid .card:nth-child(1) { grid-column: span 3; }
+            .stats-grid .card:nth-child(6) { grid-column: span 3; }
             .card-value { font-size: 20px; }
-            .profit-text { font-size: 22px; }
+            .profit-text, .rate-text { font-size: 22px; }
             .status-hunting, .status-accompanying { font-size: 14px; }
             .console { height: calc(100vh - 450px); padding: 15px; }
             .log-time { display: none; }
@@ -329,7 +327,8 @@ HTML_TEMPLATE = """
             <div class="card"><div class="card-title">Vit. Base</div><div class="card-value win-text">{{ wins_base }}</div></div>
             <div class="card"><div class="card-title">Vit. Gale</div><div class="card-value gale-text">{{ wins_gale }}</div></div>
             <div class="card"><div class="card-title">Derrotas</div><div class="card-value loss-text">{{ losses }}</div></div>
-            <div class="card status-card {% if state == 'ACOMPANHANDO' %}card-active{% else %}card-hunting{% endif %}">
+            <div class="card"><div class="card-title">Aproveit.</div><div class="card-value rate-text">{{ win_rate }}%</div></div>
+            <div class="card {% if state == 'ACOMPANHANDO' %}card-active{% else %}card-hunting{% endif %}">
                 <div class="card-title">Status do Bot</div>
                 {% if state == 'ACOMPANHANDO' %}
                     <div class="status-accompanying {{ 'signal-green' if signal == 'G' else 'signal-red' }}">{{ 'ENTRAR GREEN' if signal == 'G' else 'ENTRAR RED' }}</div>
@@ -364,8 +363,25 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def home():
+    total_jogos = wins_base + wins_gale + losses
+    win_rate = round(((wins_base + wins_gale) / total_jogos) * 100, 1) if total_jogos > 0 else 0.0
     lucro = (wins_base * LUCRO_BASE) + (wins_gale * LUCRO_GALE) - (losses * PREJUIZO_DERROTA)
-    return render_template_string(HTML_TEMPLATE, logs=log_lines, wins_base=wins_base, wins_gale=wins_gale, losses=losses, profit=lucro, history_numbers=history_numbers, history_colors=history_colors, state=bot_state, signal=signal_color, progress=progress_count, limit=progress_limit)
+    
+    return render_template_string(
+        HTML_TEMPLATE, 
+        logs=log_lines, 
+        wins_base=wins_base, 
+        wins_gale=wins_gale, 
+        losses=losses, 
+        win_rate=win_rate,
+        profit=lucro, 
+        history_numbers=history_numbers, 
+        history_colors=history_colors, 
+        state=bot_state, 
+        signal=signal_color, 
+        progress=progress_count, 
+        limit=progress_limit
+    )
 
 if __name__ == "__main__":
     init_db()                
