@@ -25,8 +25,15 @@ INTERVALO_COLETA = 60
 # Gestão de Banca (Progressão 1 -> 3)
 VALOR_BASE = 1.0
 VALOR_GALE = 3.0
+
+# Lucros em Odds 2.0x (Red/Green puro)
 LUCRO_BASE = 1.0      
 LUCRO_GALE = 2.0      
+
+# Lucros em Odds 1.5x (Caiu 0 ou 5 / Violet)
+LUCRO_BASE_VIOLET = 0.5  # 1.5 - 1.0 = 0.5
+LUCRO_GALE_VIOLET = 0.5  # (3.0 * 1.5) - 4.0 = 0.5
+
 PREJUIZO_DERROTA = 4.0 
 
 # Variáveis globais de memória (RAM)
@@ -42,6 +49,7 @@ progress_limit = 2
 wins_base = 0
 wins_gale = 0
 losses = 0
+current_profit = 0.0
 log_lines = []
 
 # ==============================================================================
@@ -61,26 +69,34 @@ def init_db():
     if conn:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS historico (issue TEXT PRIMARY KEY, cor TEXT, numero INTEGER, acao TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
-            cur.execute("CREATE TABLE IF NOT EXISTS placar (id INTEGER PRIMARY KEY DEFAULT 1, wins_base INTEGER DEFAULT 0, wins_gale INTEGER DEFAULT 0, losses INTEGER DEFAULT 0);")
-            cur.execute("INSERT INTO placar (id, wins_base, wins_gale, losses) VALUES (1, 0, 0, 0) ON CONFLICT (id) DO NOTHING;")
+            cur.execute("CREATE TABLE IF NOT EXISTS placar (id INTEGER PRIMARY KEY DEFAULT 1);")
+            
+            # AUTO-CORREÇÃO: Adiciona as colunas se elas não existirem
+            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS wins_base INTEGER DEFAULT 0;")
+            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS wins_gale INTEGER DEFAULT 0;")
+            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS losses INTEGER DEFAULT 0;")
+            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS profit REAL DEFAULT 0.0;")
+            
+            cur.execute("INSERT INTO placar (id) VALUES (1) ON CONFLICT (id) DO NOTHING;")
             conn.commit()
         conn.close()
 
 def load_placar_from_db():
-    global wins_base, wins_gale, losses
+    global wins_base, wins_gale, losses, current_profit
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT wins_base, wins_gale, losses FROM placar WHERE id = 1;")
+            cur.execute("SELECT wins_base, wins_gale, losses, profit FROM placar WHERE id = 1;")
             row = cur.fetchone()
-            if row: wins_base, wins_gale, losses = row[0], row[1], row[2]
+            if row: 
+                wins_base, wins_gale, losses, current_profit = row[0], row[1], row[2], row[3]
         conn.close()
 
 def update_placar_in_db():
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE placar SET wins_base = %s, wins_gale = %s, losses = %s WHERE id = 1;", (wins_base, wins_gale, losses))
+            cur.execute("UPDATE placar SET wins_base = %s, wins_gale = %s, losses = %s, profit = %s WHERE id = 1;", (wins_base, wins_gale, losses, current_profit))
             conn.commit()
         conn.close()
 
@@ -102,8 +118,10 @@ def load_history_from_db():
             rows.reverse()
             for row in rows:
                 issue, cor, numero = row[0], row[1], row[2]
-                if cor in ['V', 'R', 'G'] and numero is not None:
-                    history_colors.append(cor)
+                # Recalcula a cor ao carregar do banco para garantir que não tenha bug
+                cor_calculada = normalize_color(cor, numero)
+                if cor_calculada and numero is not None:
+                    history_colors.append(cor_calculada)
                     history_numbers.append(int(numero))
                     processed_issues.add(issue)
         conn.close()
@@ -127,33 +145,43 @@ def fetch_latest_results():
         return []
     except: return []
 
-def normalize_color(c):
-    c = str(c).upper()
-    if "VIOLET" in c: return "V"
-    elif "RED" in c or c == "R": return "R"
-    elif "GREEN" in c or c == "G": return "G"
+def normalize_color(c, num=None):
+    # 1. Prioriza o NÚMERO (Blindado contra bugs da API)
+    if num is not None:
+        if num == 0: return "V"  # 0 é Red/Violet
+        if num == 5: return "V"  # 5 é Green/Violet
+        if num % 2 == 0: return "R"
+        return "G"
+    
+    # 2. Fallback para a string caso o número falhe
+    c = str(c).lower()
+    if "violet" in c: return "V"
+    if "red" in c: return "R"
+    if "green" in c: return "G"
     return None
 
 def bot_loop():
-    global bot_state, progress_count, progress_limit, wins_base, wins_gale, losses, signal_color, history_numbers, history_colors, processed_issues
+    global bot_state, progress_count, progress_limit, wins_base, wins_gale, losses, current_profit, signal_color, history_numbers, history_colors, processed_issues
     add_log("🤖 BOT DAY TRADE INICIADO...")
     
     while True:
         try:
             raw = fetch_latest_results()
             if not raw:
-                time.sleep(INTERVALO_COLETA)
+                time.sleep(10)
                 continue
             
             raw.reverse()
             novos = []
             for item in raw:
                 issue = str(item.get("issueNumber"))
-                cor = normalize_color(item.get("colour", ""))
                 try:
                     num = int(item.get("number", item.get("numero", 0)))
                 except:
                     num = 0
+                
+                # Calcula a cor matematicamente pelo número
+                cor = normalize_color(item.get("colour", ""), num)
                 
                 if cor and issue not in processed_issues:
                     history_colors.append(cor)
@@ -176,19 +204,28 @@ def bot_loop():
                 if bot_state == "ACOMPANHANDO":
                     progress_count += 1
                     
-                    if cor == signal_color or (signal_color == "G" and cor == "V") or (signal_color == "R" and cor == "V"):
+                    # Verifica vitória (Red ou Green puro, ou Violet se o sinal for G ou R)
+                    if cor == signal_color or (signal_color in ["G", "R"] and cor == "V"):
+                        # Verifica se a vitória foi no Violet (1.5x) ou limpa (2.0x)
+                        is_violet_win = (cor == "V")
+                        
                         if progress_count == 1:
                             wins_base += 1
-                            add_log(f"✅✅✅ VITÓRIA NA BASE! O {signal_color} caiu! +R$ {LUCRO_BASE:.2f}")
+                            profit_add = LUCRO_BASE_VIOLET if is_violet_win else LUCRO_BASE
+                            current_profit += profit_add
+                            add_log(f"✅✅✅ VITÓRIA NA BASE! O {signal_color} caiu! +R$ {profit_add:.2f}")
                         else:
                             wins_gale += 1
-                            add_log(f"✅✅✅ VITÓRIA NO GALE! O {signal_color} caiu! +R$ {LUCRO_GALE:.2f}")
+                            profit_add = LUCRO_GALE_VIOLET if is_violet_win else LUCRO_GALE
+                            current_profit += profit_add
+                            add_log(f"✅✅✅ VITÓRIA NO GALE! O {signal_color} caiu! +R$ {profit_add:.2f}")
                         
                         bot_state = "CACANDO"; progress_count = 0; signal_color = None
                         update_placar_in_db()
                         save_game_to_db(issue, cor, num, "VITORIA")
                     elif progress_count >= progress_limit:
                         losses += 1
+                        current_profit -= PREJUIZO_DERROTA
                         add_log(f"❌❌❌ DERROTA! Janela fechou sem acerto. -R$ {PREJUIZO_DERROTA:.2f}")
                         bot_state = "CACANDO"; progress_count = 0; signal_color = None
                         update_placar_in_db()
@@ -197,7 +234,7 @@ def bot_loop():
                         add_log(f"⏳ GALE {progress_count}: Não foi dessa vez. Aguardando próximo jogo...")
                         save_game_to_db(issue, cor, num, f"GALE {progress_count}")
                 else:
-                    # LÓGICA DE CAÇADA DAY TRADE
+                    # LÓGICA DE CAÇADA DAY TRADE (INTACTA)
                     if len(history_numbers) >= 3:
                         soma_3 = sum(history_numbers[-3:])
                         last_num = history_numbers[-1]
@@ -227,7 +264,14 @@ def bot_loop():
                             save_game_to_db(issue, cor, num, "AGUARDANDO")
         except Exception as e:
             add_log(f"Erro no loop: {e}")
-        time.sleep(INTERVALO_COLETA)
+            
+        # SMART POLLING: Sincroniza com o servidor sem banir a API
+        if novos:
+            # Se achou jogo novo, o próximo só vem daqui a ~60s. Dorme 50s.
+            time.sleep(50)
+        else:
+            # Se não achou, o jogo está prestes a cair. Checa a cada 5s.
+            time.sleep(5)
 
 # ==============================================================================
 # SERVIDOR WEB (FLASK) - LAYOUT FINANCEIRO COMPLETO
@@ -356,7 +400,10 @@ HTML_TEMPLATE = """
             {% endfor %}
         </div>
     </div>
-    <script>consoleDiv.scrollTop = consoleDiv.scrollHeight;</script>
+    <script>
+        const consoleDiv = document.getElementById('consoleBox');
+        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+    </script>
 </body>
 </html>
 """
@@ -365,7 +412,6 @@ HTML_TEMPLATE = """
 def home():
     total_jogos = wins_base + wins_gale + losses
     win_rate = round(((wins_base + wins_gale) / total_jogos) * 100, 1) if total_jogos > 0 else 0.0
-    lucro = (wins_base * LUCRO_BASE) + (wins_gale * LUCRO_GALE) - (losses * PREJUIZO_DERROTA)
     
     return render_template_string(
         HTML_TEMPLATE, 
@@ -374,7 +420,7 @@ def home():
         wins_gale=wins_gale, 
         losses=losses, 
         win_rate=win_rate,
-        profit=lucro, 
+        profit=current_profit, 
         history_numbers=history_numbers, 
         history_colors=history_colors, 
         state=bot_state, 
