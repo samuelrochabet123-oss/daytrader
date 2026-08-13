@@ -8,7 +8,7 @@ from flask import Flask, render_template_string
 from datetime import datetime
 
 # ==============================================================================
-# CONFIGURAÇÕES DA API
+# CONFIGURAÇÕES DA API E GESTÃO FINANCEIRA
 # ==============================================================================
 API_URL = "https://22885.club/api/webapi/GetNoaverageEmerdList"
 API_HEADERS = {
@@ -22,17 +22,25 @@ API_HEADERS = {
 }
 INTERVALO_COLETA = 60 
 
+# Gestão de Banca (Progressão 1 -> 3)
+VALOR_BASE = 1.0
+VALOR_GALE = 3.0
+LUCRO_BASE = 1.0      # Ganhou na 1ª tentativa
+LUCRO_GALE = 2.0      # Ganhou na 2ª tentativa (recupera 1+3 e lucra 2)
+PREJUIZO_DERROTA = 4.0 # Perdeu as duas (1+3)
+
 # Variáveis globais de memória (RAM)
 history_numbers = []
 history_colors = []
 processed_issues = set()
 
 # Estado do Bot (Day Trade)
-bot_state = "CACANDO" # Pode ser CACANDO ou ACOMPANHANDO
-signal_color = None   # 'G' ou 'R'
+bot_state = "CACANDO" 
+signal_color = None   
 progress_count = 0
-progress_limit = 2    # Gale 1 (Entrada + 1 tentativa)
-wins = 0
+progress_limit = 2    
+wins_base = 0
+wins_gale = 0
 losses = 0
 log_lines = []
 
@@ -53,26 +61,26 @@ def init_db():
     if conn:
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS historico (issue TEXT PRIMARY KEY, cor TEXT, numero INTEGER, acao TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
-            cur.execute("CREATE TABLE IF NOT EXISTS placar (id INTEGER PRIMARY KEY DEFAULT 1, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0);")
-            cur.execute("INSERT INTO placar (id, wins, losses) VALUES (1, 0, 0) ON CONFLICT (id) DO NOTHING;")
+            cur.execute("CREATE TABLE IF NOT EXISTS placar (id INTEGER PRIMARY KEY DEFAULT 1, wins_base INTEGER DEFAULT 0, wins_gale INTEGER DEFAULT 0, losses INTEGER DEFAULT 0);")
+            cur.execute("INSERT INTO placar (id, wins_base, wins_gale, losses) VALUES (1, 0, 0, 0) ON CONFLICT (id) DO NOTHING;")
             conn.commit()
         conn.close()
 
 def load_placar_from_db():
-    global wins, losses
+    global wins_base, wins_gale, losses
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT wins, losses FROM placar WHERE id = 1;")
+            cur.execute("SELECT wins_base, wins_gale, losses FROM placar WHERE id = 1;")
             row = cur.fetchone()
-            if row: wins, losses = row[0], row[1]
+            if row: wins_base, wins_gale, losses = row[0], row[1], row[2]
         conn.close()
 
 def update_placar_in_db():
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE placar SET wins = %s, losses = %s WHERE id = 1;", (wins, losses))
+            cur.execute("UPDATE placar SET wins_base = %s, wins_gale = %s, losses = %s WHERE id = 1;", (wins_base, wins_gale, losses))
             conn.commit()
         conn.close()
 
@@ -127,7 +135,7 @@ def normalize_color(c):
     return None
 
 def bot_loop():
-    global bot_state, progress_count, progress_limit, wins, losses, signal_color, history_numbers, history_colors, processed_issues
+    global bot_state, progress_count, progress_limit, wins_base, wins_gale, losses, signal_color, history_numbers, history_colors, processed_issues
     add_log("🤖 BOT DAY TRADE INICIADO...")
     
     while True:
@@ -142,7 +150,6 @@ def bot_loop():
             for item in raw:
                 issue = str(item.get("issueNumber"))
                 cor = normalize_color(item.get("colour", ""))
-                # Pega o número (tratando possíveis erros de formato da API)
                 try:
                     num = int(item.get("number", item.get("numero", 0)))
                 except:
@@ -171,14 +178,19 @@ def bot_loop():
                     
                     # Verifica se acertou a cor alvo
                     if cor == signal_color or (signal_color == "G" and cor == "V") or (signal_color == "R" and cor == "V"):
-                        wins += 1
-                        add_log(f"✅✅✅ VITÓRIA! O {signal_color} caiu! (Jogo {progress_count}/{progress_limit})")
+                        if progress_count == 1:
+                            wins_base += 1
+                            add_log(f"✅✅✅ VITÓRIA NA BASE! O {signal_color} caiu! +R$ {LUCRO_BASE:.2f}")
+                        else:
+                            wins_gale += 1
+                            add_log(f"✅✅✅ VITÓRIA NO GALE! O {signal_color} caiu! +R$ {LUCRO_GALE:.2f}")
+                        
                         bot_state = "CACANDO"; progress_count = 0; signal_color = None
                         update_placar_in_db()
                         save_game_to_db(issue, cor, num, "VITORIA")
                     elif progress_count >= progress_limit:
                         losses += 1
-                        add_log(f"❌❌❌ DERROTA! Janela de {progress_limit} jogos fechou sem acerto.")
+                        add_log(f"❌❌❌ DERROTA! Janela fechou sem acerto. -R$ {PREJUIZO_DERROTA:.2f}")
                         bot_state = "CACANDO"; progress_count = 0; signal_color = None
                         update_placar_in_db()
                         save_game_to_db(issue, cor, num, "DERROTA")
@@ -186,7 +198,7 @@ def bot_loop():
                         add_log(f"⏳ GALE {progress_count}: Não foi dessa vez. Aguardando próximo jogo...")
                         save_game_to_db(issue, cor, num, f"GALE {progress_count}")
                 else:
-                    # LÓGICA DE CAÇADA DAY TRADE
+                    # LÓGICA DE CAÇADA DAY TRADE (Intacta)
                     if len(history_numbers) >= 3:
                         soma_3 = sum(history_numbers[-3:])
                         last_num = history_numbers[-1]
@@ -209,7 +221,7 @@ def bot_loop():
                         if sinal_disparado:
                             bot_state = "ACOMPANHANDO"
                             signal_color = sinal_disparado
-                            progress_limit = 2 # Entrada + Gale 1
+                            progress_limit = 2 
                             progress_count = 0
                             add_log(f"🚀 ENTRAR NO {signal_color}! Janela de {progress_limit} jogos (Gale 1).")
                             save_game_to_db(issue, cor, num, f"SINAL {signal_color}")
@@ -221,7 +233,7 @@ def bot_loop():
         time.sleep(INTERVALO_COLETA)
 
 # ==============================================================================
-# SERVIDOR WEB (FLASK) - LAYOUT PREMIUM
+# SERVIDOR WEB (FLASK) - LAYOUT PREMIUM COM MÓDULO FINANCEIRO
 # ==============================================================================
 app = Flask(__name__)
 
@@ -253,53 +265,44 @@ HTML_TEMPLATE = """
 
         .trend-strip { display: flex; gap: 6px; margin-bottom: 20px; overflow-x: auto; padding: 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; backdrop-filter: blur(12px); }
         .trend-pill { min-width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #fff; box-shadow: 0 2px 5px rgba(0,0,0,0.3); flex-shrink: 0; }
-        .pill-r { background: var(--red); }
-        .pill-g { background: var(--green); }
-        .pill-v { background: var(--purple); box-shadow: 0 0 10px var(--purple); }
+        .pill-r { background: var(--red); } .pill-g { background: var(--green); } .pill-v { background: var(--purple); box-shadow: 0 0 10px var(--purple); }
 
-        .stats-grid { display: grid; grid-template-columns: 1fr 1fr 2fr 1.5fr; gap: 15px; margin-bottom: 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 20px; }
         .card { background: var(--bg-card); border: 1px solid var(--border); backdrop-filter: blur(12px); border-radius: 16px; padding: 15px; text-align: center; transition: all 0.4s ease; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
         .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: transparent; transition: 0.4s; }
-        .card-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; font-weight: 600; }
-        .card-value { font-size: 32px; font-weight: 900; line-height: 1; } 
+        .card-title { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; font-weight: 600; }
+        .card-value { font-size: 26px; font-weight: 900; line-height: 1; } 
         .win-text { color: var(--green); text-shadow: 0 0 15px rgba(0, 230, 118, 0.4); }
         .loss-text { color: var(--red); text-shadow: 0 0 15px rgba(255, 82, 82, 0.4); }
-        .rate-text { color: var(--purple); text-shadow: 0 0 20px rgba(188, 82, 255, 0.5); font-size: 40px; } 
+        .gale-text { color: var(--yellow); text-shadow: 0 0 15px rgba(255, 202, 40, 0.4); }
+        .profit-text { font-size: 28px; font-weight: 900; }
+        
+        .status-card { grid-column: span 2; }
         .status-hunting { color: var(--yellow); font-size: 18px; font-weight: 700; }
         .status-accompanying { font-size: 18px; font-weight: 700; }
         .signal-green { color: var(--green); text-shadow: 0 0 15px var(--green); }
         .signal-red { color: var(--red); text-shadow: 0 0 15px var(--red); }
-        .card-hunting::before { background: var(--yellow); box-shadow: 0 0 15px var(--yellow); }
-        .card-active { border-color: var(--purple); box-shadow: 0 0 30px rgba(188, 82, 255, 0.15); }
-        .card-active::before { background: var(--purple); box-shadow: 0 0 15px var(--purple); }
+        .card-hunting::before { background: var(--yellow); } .card-active { border-color: var(--purple); } .card-active::before { background: var(--purple); }
         .progress-bar { height: 6px; background: rgba(255,255,255,0.1); border-radius: 10px; margin-top: 10px; overflow: hidden; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, var(--purple), #fff); border-radius: 10px; transition: width 0.5s ease; box-shadow: 0 0 10px var(--purple); }
 
         .console { background: var(--bg-card); border: 1px solid var(--border); backdrop-filter: blur(12px); border-radius: 16px; padding: 20px; height: calc(100vh - 380px); min-height: 300px; overflow-y: auto; font-family: 'JetBrains Mono', monospace; }
-        .console::-webkit-scrollbar { width: 6px; }
-        .console::-webkit-scrollbar-track { background: transparent; }
-        .console::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
-        .log-line { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.03); font-size: 14px; line-height: 1.5; display: flex; align-items: baseline; }
+        .console::-webkit-scrollbar { width: 6px; } .console::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        .log-line { padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.03); font-size: 14px; display: flex; }
         .log-time { color: var(--text-muted); margin-right: 15px; font-size: 12px; min-width: 70px; }
         .log-msg { flex: 1; }
-        .log-vitoria .log-msg { color: var(--green); font-weight: 700; }
-        .log-derrota .log-msg { color: var(--red); font-weight: 700; }
-        .log-sinal .log-msg { color: var(--purple); font-weight: 700; text-shadow: 0 0 5px rgba(188, 82, 255, 0.3); }
-        .log-aguardando .log-msg { color: var(--text-muted); }
-        .log-acompanhando .log-msg { color: var(--yellow); font-weight: 600; }
-        .log-jogo .log-msg { color: var(--text); font-weight: 700; }
+        .log-vitoria .log-msg { color: var(--green); font-weight: 700; } .log-derrota .log-msg { color: var(--red); font-weight: 700; }
+        .log-sinal .log-msg { color: var(--purple); font-weight: 700; } .log-aguardando .log-msg { color: var(--text-muted); }
+        .log-acompanhando .log-msg { color: var(--yellow); font-weight: 600; } .log-jogo .log-msg { color: var(--text); font-weight: 700; }
 
         @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .stats-grid .card:nth-child(3) { grid-column: span 2; } 
-            .stats-grid .card:nth-child(4) { grid-column: span 2; } 
-            .card-value { font-size: 26px; }
-            .rate-text { font-size: 32px; }
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+            .status-card { grid-column: span 3; }
+            .card-value { font-size: 20px; }
+            .profit-text { font-size: 22px; }
             .status-hunting, .status-accompanying { font-size: 14px; }
-            .console { height: calc(100vh - 480px); padding: 15px; }
+            .console { height: calc(100vh - 450px); padding: 15px; }
             .log-time { display: none; }
-            .log-line { font-size: 13px; }
-            .logo-text { font-size: 22px; }
         }
     </style>
 </head>
@@ -307,9 +310,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <div class="logo-wrapper">
-                <div class="bot-icon">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>
-                </div>
+                <div class="bot-icon"><svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path></svg></div>
                 <div class="logo-text">Bot Day Trade</div>
             </div>
             <div class="live-badge"><div class="live-dot"></div> LIVE</div>
@@ -324,15 +325,14 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="stats-grid">
-            <div class="card"><div class="card-title">Vitórias</div><div class="card-value win-text">{{ wins }}</div></div>
+            <div class="card"><div class="card-title">Saldo (R$)</div><div class="card-value profit-text {{ 'win-text' if profit >= 0 else 'loss-text' }}">{{ '%.2f' % profit }}</div></div>
+            <div class="card"><div class="card-title">Vit. Base</div><div class="card-value win-text">{{ wins_base }}</div></div>
+            <div class="card"><div class="card-title">Vit. Gale</div><div class="card-value gale-text">{{ wins_gale }}</div></div>
             <div class="card"><div class="card-title">Derrotas</div><div class="card-value loss-text">{{ losses }}</div></div>
-            <div class="card"><div class="card-title">Aproveitamento</div><div class="card-value rate-text">{{ win_rate }}%</div></div>
-            <div class="card {% if state == 'ACOMPANHANDO' %}card-active{% else %}card-hunting{% endif %}">
+            <div class="card status-card {% if state == 'ACOMPANHANDO' %}card-active{% else %}card-hunting{% endif %}">
                 <div class="card-title">Status do Bot</div>
                 {% if state == 'ACOMPANHANDO' %}
-                    <div class="status-accompanying {{ 'signal-green' if signal == 'G' else 'signal-red' }}">
-                        {{ 'ENTRAR GREEN' if signal == 'G' else 'ENTRAR RED' }}
-                    </div>
+                    <div class="status-accompanying {{ 'signal-green' if signal == 'G' else 'signal-red' }}">{{ 'ENTRAR GREEN' if signal == 'G' else 'ENTRAR RED' }}</div>
                     <div class="progress-bar"><div class="progress-fill" style="width: {{ (progress / limit) * 100 }}%;"></div></div>
                 {% else %}
                     <div class="status-hunting">CAÇANDO NÚMEROS</div>
@@ -352,50 +352,27 @@ HTML_TEMPLATE = """
                     <div class="log-line log-acompanhando"><span class="log-time">{{ line.split(']')[0].replace('[','') }}</span><span class="log-msg">⏳ {{ line.split(']')[1] }}</span></div>
                 {% elif 'NOVO JOGO' in line %}
                     <div class="log-line log-jogo"><span class="log-time">{{ line.split(']')[0].replace('[','') }}</span><span class="log-msg">🎲 {{ line.split(']')[1] }}</span></div>
-                {% elif '==' in line or '--' in line %}
-                    <div class="log-line log-separador"></div>
-                {% else %}
-                    <div class="log-line"><span class="log-time">{{ line.split(']')[0].replace('[','') }}</span><span class="log-msg">{{ line.split(']')[1] }}</span></div>
-                {% endif %}
+                {% elif '==' in line or '--' in line %}<div class="log-line"></div>
+                {% else %}<div class="log-line"><span class="log-time">{{ line.split(']')[0].replace('[','') }}</span><span class="log-msg">{{ line.split(']')[1] }}</span></div>{% endif %}
             {% endfor %}
         </div>
     </div>
-    
-    <script>
-        const consoleDiv = document.getElementById('consoleBox');
-        consoleDiv.scrollTop = consoleDiv.scrollHeight;
-    </script>
+    <script>consoleDiv.scrollTop = consoleDiv.scrollHeight;</script>
 </body>
 </html>
 """
 
 @app.route('/')
 def home():
-    total_jogos = wins + losses
-    win_rate = round((wins / total_jogos) * 100, 1) if total_jogos > 0 else 0.0
-    
-    return render_template_string(
-        HTML_TEMPLATE, 
-        logs=log_lines, 
-        wins=wins, 
-        losses=losses, 
-        win_rate=win_rate,
-        history_numbers=history_numbers,
-        history_colors=history_colors,
-        state=bot_state,
-        signal=signal_color,
-        progress=progress_count, 
-        limit=progress_limit
-    )
+    lucro = (wins_base * LUCRO_BASE) + (wins_gale * LUCRO_GALE) - (losses * PREJUIZO_DERROTA)
+    return render_template_string(HTML_TEMPLATE, logs=log_lines, wins_base=wins_base, wins_gale=wins_gale, losses=losses, profit=lucro, history_numbers=history_numbers, history_colors=history_colors, state=bot_state, signal=signal_color, progress=progress_count, limit=progress_limit)
 
 if __name__ == "__main__":
     init_db()                
     load_placar_from_db()   
     load_history_from_db()  
-    
     t = threading.Thread(target=bot_loop)
     t.daemon = True
     t.start()
-    
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
