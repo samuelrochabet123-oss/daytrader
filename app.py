@@ -31,8 +31,8 @@ LUCRO_BASE = 1.0
 LUCRO_GALE = 2.0      
 
 # Lucros em Odds 1.5x (Caiu 0 ou 5 / Violet)
-LUCRO_BASE_VIOLET = 0.5  # 1.5 - 1.0 = 0.5
-LUCRO_GALE_VIOLET = 0.5  # (3.0 * 1.5) - 4.0 = 0.5
+LUCRO_BASE_VIOLET = 0.5  
+LUCRO_GALE_VIOLET = 0.5  
 
 PREJUIZO_DERROTA = 4.0 
 
@@ -53,7 +53,7 @@ current_profit = 0.0
 log_lines = []
 
 # ==============================================================================
-# BANCO DE DADOS (PostgreSQL do Railway)
+# BANCO DE DADOS (PostgreSQL do Railway) - MODO RESET TOTAL
 # ==============================================================================
 def get_db_connection():
     try:
@@ -68,28 +68,15 @@ def init_db():
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            cur.execute("CREATE TABLE IF NOT EXISTS historico (issue TEXT PRIMARY KEY, cor TEXT, numero INTEGER, acao TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
-            cur.execute("CREATE TABLE IF NOT EXISTS placar (id INTEGER PRIMARY KEY DEFAULT 1);")
+            # 🧹 LIMPEZA TOTAL: Apaga tudo para recomeçar do zero a cada reinicialização
+            cur.execute("DROP TABLE IF EXISTS historico;")
+            cur.execute("DROP TABLE IF EXISTS placar;")
             
-            # AUTO-CORREÇÃO: Adiciona as colunas se elas não existirem
-            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS wins_base INTEGER DEFAULT 0;")
-            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS wins_gale INTEGER DEFAULT 0;")
-            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS losses INTEGER DEFAULT 0;")
-            cur.execute("ALTER TABLE placar ADD COLUMN IF NOT EXISTS profit REAL DEFAULT 0.0;")
-            
-            cur.execute("INSERT INTO placar (id) VALUES (1) ON CONFLICT (id) DO NOTHING;")
+            # Cria as tabelas limpinhas
+            cur.execute("CREATE TABLE historico (issue TEXT PRIMARY KEY, cor TEXT, numero INTEGER, acao TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
+            cur.execute("CREATE TABLE placar (id INTEGER PRIMARY KEY DEFAULT 1, wins_base INTEGER DEFAULT 0, wins_gale INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, profit REAL DEFAULT 0.0);")
+            cur.execute("INSERT INTO placar (id, wins_base, wins_gale, losses, profit) VALUES (1, 0, 0, 0, 0.0);")
             conn.commit()
-        conn.close()
-
-def load_placar_from_db():
-    global wins_base, wins_gale, losses, current_profit
-    conn = get_db_connection()
-    if conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT wins_base, wins_gale, losses, profit FROM placar WHERE id = 1;")
-            row = cur.fetchone()
-            if row: 
-                wins_base, wins_gale, losses, current_profit = row[0], row[1], row[2], row[3]
         conn.close()
 
 def update_placar_in_db():
@@ -106,24 +93,6 @@ def save_game_to_db(issue, cor, numero, acao):
         with conn.cursor() as cur:
             cur.execute("INSERT INTO historico (issue, cor, numero, acao) VALUES (%s, %s, %s, %s) ON CONFLICT (issue) DO NOTHING;", (issue, cor, numero, acao))
             conn.commit()
-        conn.close()
-
-def load_history_from_db():
-    global history_numbers, history_colors, processed_issues
-    conn = get_db_connection()
-    if conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT issue, cor, numero FROM historico ORDER BY timestamp DESC LIMIT 50;")
-            rows = cur.fetchall()
-            rows.reverse()
-            for row in rows:
-                issue, cor, numero = row[0], row[1], row[2]
-                # Recalcula a cor ao carregar do banco para garantir que não tenha bug
-                cor_calculada = normalize_color(cor, numero)
-                if cor_calculada and numero is not None:
-                    history_colors.append(cor_calculada)
-                    history_numbers.append(int(numero))
-                    processed_issues.add(issue)
         conn.close()
 
 # ==============================================================================
@@ -162,7 +131,7 @@ def normalize_color(c, num=None):
 
 def bot_loop():
     global bot_state, progress_count, progress_limit, wins_base, wins_gale, losses, current_profit, signal_color, history_numbers, history_colors, processed_issues
-    add_log("🤖 BOT DAY TRADE INICIADO...")
+    add_log("🤖 BOT DAY TRADE INICIADO (MODO RESET)...")
     
     while True:
         try:
@@ -204,9 +173,7 @@ def bot_loop():
                 if bot_state == "ACOMPANHANDO":
                     progress_count += 1
                     
-                    # Verifica vitória (Red ou Green puro, ou Violet se o sinal for G ou R)
                     if cor == signal_color or (signal_color in ["G", "R"] and cor == "V"):
-                        # Verifica se a vitória foi no Violet (1.5x) ou limpa (2.0x)
                         is_violet_win = (cor == "V")
                         
                         if progress_count == 1:
@@ -234,7 +201,7 @@ def bot_loop():
                         add_log(f"⏳ GALE {progress_count}: Não foi dessa vez. Aguardando próximo jogo...")
                         save_game_to_db(issue, cor, num, f"GALE {progress_count}")
                 else:
-                    # LÓGICA DE CAÇADA DAY TRADE (INTACTA)
+                    # LÓGICA DE CAÇADA DAY TRADE
                     if len(history_numbers) >= 3:
                         soma_3 = sum(history_numbers[-3:])
                         last_num = history_numbers[-1]
@@ -265,16 +232,14 @@ def bot_loop():
         except Exception as e:
             add_log(f"Erro no loop: {e}")
             
-        # SMART POLLING: Sincroniza com o servidor sem banir a API
+        # SMART POLLING
         if novos:
-            # Se achou jogo novo, o próximo só vem daqui a ~60s. Dorme 50s.
             time.sleep(50)
         else:
-            # Se não achou, o jogo está prestes a cair. Checa a cada 5s.
             time.sleep(5)
 
 # ==============================================================================
-# SERVIDOR WEB (FLASK) - LAYOUT FINANCEIRO COMPLETO
+# SERVIDOR WEB (FLASK)
 # ==============================================================================
 app = Flask(__name__)
 
@@ -430,9 +395,9 @@ def home():
     )
 
 if __name__ == "__main__":
-    init_db()                
-    load_placar_from_db()   
-    load_history_from_db()  
+    init_db()  # Apaga e recria as tabelas (Zera tudo)
+    # Não carregamos mais o placar nem o histórico, pois o init_db() zerou tudo.
+    
     t = threading.Thread(target=bot_loop)
     t.daemon = True
     t.start()
