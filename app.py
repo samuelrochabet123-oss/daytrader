@@ -243,7 +243,7 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="10">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='10' width='24' height='18' rx='4' fill='%23bc52ff'/%3E%3Ccircle cx='12' cy='18' r='2.5' fill='%23080a0f'/%3E%3Ccircle cx='20' cy='18' r='2.5' fill='%23080a0f'/%3E%3Cline x1='12' y1='24' x2='20' y2='24' stroke='%23080a0f' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='16' y1='10' x2='16' y2='4' stroke='%23bc52ff' stroke-width='2'/%3E%3Ccircle cx='16' cy='3' r='2.5' fill='%23bc52ff'/%3E%3C/svg%3E">
-    <title>Bot Aposta Fixa</title>
+    <title>Bot Day Trade</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         :root { --bg-main: #080a0f; --bg-card: rgba(22, 27, 34, 0.7); --border: rgba(255, 255, 255, 0.08); --text: #e6edf3; --text-muted: #7d8590; --purple: #bc52ff; --green: #00e676; --red: #ff5252; --yellow: #ffca28; }
