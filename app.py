@@ -31,7 +31,7 @@ PREJUIZO_DERROTA = 1.0
 history_numbers = []
 history_colors = []
 processed_issues = set()
-history_results = [] # Lista para o painel de histórico
+history_results = [] 
 
 # Estado do Bot
 bot_state = "CACANDO" 
@@ -55,11 +55,8 @@ def init_db():
     conn = get_db_connection()
     if conn:
         with conn.cursor() as cur:
-            # 🧹 LIMPEZA TOTAL: Apaga tudo para recomeçar do zero a cada reinicialização
             cur.execute("DROP TABLE IF EXISTS historico;")
             cur.execute("DROP TABLE IF EXISTS placar;")
-            
-            # Cria as tabelas limpinhas
             cur.execute("CREATE TABLE historico (issue TEXT PRIMARY KEY, cor TEXT, numero INTEGER, acao TEXT, timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
             cur.execute("CREATE TABLE placar (id INTEGER PRIMARY KEY DEFAULT 1, wins INTEGER DEFAULT 0, losses INTEGER DEFAULT 0, profit REAL DEFAULT 0.0);")
             cur.execute("INSERT INTO placar (id, wins, losses, profit) VALUES (1, 0, 0, 0.0);")
@@ -83,7 +80,7 @@ def save_game_to_db(issue, cor, numero, acao):
         conn.close()
 
 # ==============================================================================
-# LÓGICA DO BOT (APOSTA FIXA - SEM GALE)
+# LÓGICA DO BOT (APOSTA FIXA - MODO SILENCIOSO)
 # ==============================================================================
 def add_log(msg):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -115,7 +112,7 @@ def normalize_color(c, num=None):
 
 def bot_loop():
     global bot_state, wins, losses, current_profit, signal_color, history_numbers, history_colors, processed_issues, history_results
-    add_log("🤖 BOT APOSTA FIXA INICIADO...")
+    add_log("🤖 BOT APOSTA FIXA INICIADO (MODO SILENCIOSO)...")
     
     while True:
         try:
@@ -146,11 +143,6 @@ def bot_loop():
                 
             for jogo in novos:
                 issue, cor, num = jogo["issue"], jogo["cor"], jogo["num"]
-                cor_formatada = "🟣 VIOLET" if cor == "V" else "🔴 RED" if cor == "R" else "🟢 GREEN"
-                
-                add_log("="*60)
-                add_log(f"🎲 NOVO JOGO: {issue} | COR: {cor_formatada} | Nº: {num}")
-                add_log("-"*60)
 
                 if bot_state == "ACOMPANHANDO":
                     # Lógica Sem Gale: Avalia imediatamente se ganhou ou perdeu
@@ -218,8 +210,8 @@ def bot_loop():
                             add_log(f"Regra: {motivo}")
                             add_log(f"🚀 ENTRAR NO {signal_color}! (Aposta Fixa R${VALOR_BASE:.2f})")
                             save_game_to_db(issue, cor, num, f"SINAL {signal_color}")
+                        # Removido o 'else: add_log("⚪ AGUARDANDO...")' para não poluir a tela
                         else:
-                            add_log("⚪ AGUARDANDO... Nenhum padrão ativo.")
                             save_game_to_db(issue, cor, num, "AGUARDANDO")
         except Exception as e:
             add_log(f"Erro no loop: {e}")
@@ -243,7 +235,7 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="10">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='10' width='24' height='18' rx='4' fill='%23bc52ff'/%3E%3Ccircle cx='12' cy='18' r='2.5' fill='%23080a0f'/%3E%3Ccircle cx='20' cy='18' r='2.5' fill='%23080a0f'/%3E%3Cline x1='12' y1='24' x2='20' y2='24' stroke='%23080a0f' stroke-width='2' stroke-linecap='round'/%3E%3Cline x1='16' y1='10' x2='16' y2='4' stroke='%23bc52ff' stroke-width='2'/%3E%3Ccircle cx='16' cy='3' r='2.5' fill='%23bc52ff'/%3E%3C/svg%3E">
-    <title>Bot Day Trade</title>
+    <title>Bot Aposta Fixa</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
     <style>
         :root { --bg-main: #080a0f; --bg-card: rgba(22, 27, 34, 0.7); --border: rgba(255, 255, 255, 0.08); --text: #e6edf3; --text-muted: #7d8590; --purple: #bc52ff; --green: #00e676; --red: #ff5252; --yellow: #ffca28; }
