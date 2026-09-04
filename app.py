@@ -4,11 +4,13 @@ import numpy as np
 import os
 import threading
 import psycopg2
-from flask import Flask, render_template_string
+
+from flask import Flask, render_template_string, redirect
 from datetime import datetime
 
+
 # ==============================================================================
-# CONFIGURAÇÕES DA API E GESTÃO FINANCEIRA
+# CONFIGURAÇÕES DA API
 # ==============================================================================
 
 API_URL = "https://22885.club/api/webapi/GetNoaverageEmerdList"
@@ -16,7 +18,9 @@ API_URL = "https://22885.club/api/webapi/GetNoaverageEmerdList"
 API_HEADERS = {
     "accept": "application/json, text/plain, */*",
 
-    # ⚠️ COLOQUE SEU TOKEN COMPLETO AQUI
+    # ============================================================
+    # COLOQUE SEU TOKEN COMPLETO AQUI
+    # ============================================================
     "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
 
     "content-type": "application/json;charset=UTF-8",
@@ -24,6 +28,7 @@ API_HEADERS = {
     "referer": "https://popbra66.com/",
     "user-agent": "Mozilla/5.0 (X11; Linux x86_64)"
 }
+
 
 # ==============================================================================
 # GESTÃO FINANCEIRA
@@ -57,20 +62,33 @@ history_results = []
 # ESTADO DO BOT
 # ==============================================================================
 
-bot_state = "CACANDO"
+bot_state = "PARADO"
 
 signal_color = None
 
-# Contadores
+# Controle manual
+bot_running = False
+
+# Lock para evitar conflitos entre Flask e thread
+bot_lock = threading.Lock()
+
+
+# ==============================================================================
+# CONTADORES DA SESSÃO ATUAL
+# ==============================================================================
+
 wins = 0
 wins_05 = 0
 wins_10 = 0
 losses = 0
 
-# Saldo
 current_profit = 0.0
 
-# Logs
+
+# ==============================================================================
+# LOGS
+# ==============================================================================
+
 log_lines = []
 
 
@@ -89,7 +107,7 @@ def get_db_connection():
 
         return psycopg2.connect(database_url)
 
-    except Exception:
+    except Exception as e:
 
         return None
 
@@ -102,17 +120,21 @@ def init_db():
 
     conn = get_db_connection()
 
-    if conn:
+    if not conn:
+        add_log("⚠️ Banco de dados não configurado.")
+        return
+
+    try:
 
         with conn.cursor() as cur:
 
-            # ⚠️ MODO RESET TOTAL
-            cur.execute("DROP TABLE IF EXISTS historico;")
-            cur.execute("DROP TABLE IF EXISTS placar;")
+            # ==============================================================
+            # IMPORTANTE:
+            # NÃO APAGA MAIS AS TABELAS AO REINICIAR
+            # ==============================================================
 
-            # Histórico das entradas/resultados
             cur.execute("""
-                CREATE TABLE historico (
+                CREATE TABLE IF NOT EXISTS historico (
                     issue TEXT PRIMARY KEY,
                     cor TEXT,
                     numero INTEGER,
@@ -121,9 +143,8 @@ def init_db():
                 );
             """)
 
-            # Placar
             cur.execute("""
-                CREATE TABLE placar (
+                CREATE TABLE IF NOT EXISTS placar (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     wins INTEGER DEFAULT 0,
                     wins_05 INTEGER DEFAULT 0,
@@ -133,16 +154,27 @@ def init_db():
                 );
             """)
 
+            # ==============================================================
+            # GARANTE QUE EXISTE UM PLACAR
+            # ==============================================================
+
             cur.execute("""
                 INSERT INTO placar
                 (id, wins, wins_05, wins_10, losses, profit)
                 VALUES
-                (1, 0, 0, 0, 0, 0.0);
+                (1, 0, 0, 0, 0, 0.0)
+                ON CONFLICT (id) DO NOTHING;
             """)
 
             conn.commit()
 
         conn.close()
+
+        add_log("🗄️ Banco de dados inicializado.")
+
+    except Exception as e:
+
+        add_log(f"⚠️ Erro ao inicializar banco: {e}")
 
 
 # ==============================================================================
@@ -153,7 +185,10 @@ def update_placar_in_db():
 
     conn = get_db_connection()
 
-    if conn:
+    if not conn:
+        return
+
+    try:
 
         with conn.cursor() as cur:
 
@@ -178,6 +213,10 @@ def update_placar_in_db():
 
         conn.close()
 
+    except Exception as e:
+
+        add_log(f"⚠️ Erro ao atualizar placar: {e}")
+
 
 # ==============================================================================
 # SALVA JOGO NO BANCO
@@ -187,7 +226,10 @@ def save_game_to_db(issue, cor, numero, acao):
 
     conn = get_db_connection()
 
-    if conn:
+    if not conn:
+        return
+
+    try:
 
         with conn.cursor() as cur:
 
@@ -208,6 +250,10 @@ def save_game_to_db(issue, cor, numero, acao):
 
         conn.close()
 
+    except Exception as e:
+
+        add_log(f"⚠️ Erro ao salvar histórico: {e}")
+
 
 # ==============================================================================
 # SISTEMA DE LOG
@@ -224,6 +270,90 @@ def add_log(msg):
     if len(log_lines) > 50:
 
         log_lines.pop(0)
+
+
+# ==============================================================================
+# INICIAR NOVA SESSÃO
+# ==============================================================================
+
+def start_bot():
+
+    global bot_running
+    global wins
+    global wins_05
+    global wins_10
+    global losses
+    global current_profit
+    global bot_state
+    global signal_color
+    global history_results
+
+    with bot_lock:
+
+        # ==============================================================
+        # NOVA SESSÃO FINANCEIRA
+        # ==============================================================
+
+        wins = 0
+        wins_05 = 0
+        wins_10 = 0
+        losses = 0
+
+        current_profit = 0.0
+
+        # ==============================================================
+        # LIMPA OPERAÇÃO ANTERIOR
+        # ==============================================================
+
+        bot_state = "CACANDO"
+
+        signal_color = None
+
+        history_results = []
+
+        # ==============================================================
+        # ATIVA BOT
+        # ==============================================================
+
+        bot_running = True
+
+        add_log("")
+        add_log("==========================================")
+        add_log("🟢 BOT INICIADO MANUALMENTE")
+        add_log("💰 NOVA SESSÃO FINANCEIRA")
+        add_log("📊 PLACAR ZERADO")
+        add_log("==========================================")
+
+        update_placar_in_db()
+
+
+# ==============================================================================
+# PARAR BOT
+# ==============================================================================
+
+def stop_bot():
+
+    global bot_running
+    global bot_state
+    global signal_color
+
+    with bot_lock:
+
+        bot_running = False
+
+        bot_state = "PARADO"
+
+        signal_color = None
+
+        add_log("")
+        add_log("==========================================")
+        add_log("🔴 BOT PARADO MANUALMENTE")
+        add_log(
+            f"💰 SALDO FINAL DA SESSÃO: "
+            f"R$ {current_profit:.2f}"
+        )
+        add_log("📊 RESULTADO CONGELADO")
+        add_log("==========================================")
 
 
 # ==============================================================================
@@ -317,24 +447,24 @@ def normalize_color(c, num=None):
 
 def bot_loop():
 
-    global \
-        bot_state, \
-        wins, \
-        wins_05, \
-        wins_10, \
-        losses, \
-        current_profit, \
-        signal_color, \
-        history_numbers, \
-        history_colors, \
-        processed_issues, \
-        history_results
+    global bot_state
+    global wins
+    global wins_05
+    global wins_10
+    global losses
+    global current_profit
+    global signal_color
+    global history_numbers
+    global history_colors
+    global processed_issues
+    global history_results
 
-    add_log(
-        "🤖 BOT APOSTA FIXA INICIADO (MODO SILENCIOSO)..."
-    )
+    add_log("🤖 SISTEMA INICIADO.")
+    add_log("⏹ BOT AGUARDANDO COMANDO INICIAR.")
 
     while True:
+
+        novos = []
 
         try:
 
@@ -346,17 +476,24 @@ def bot_loop():
 
             if not raw:
 
-                time.sleep(10)
+                time.sleep(5)
 
                 continue
 
-            raw.reverse()
 
-            novos = []
+            # ==================================================================
+            # ORGANIZA ORDEM DOS RESULTADOS
+            # ==================================================================
+
+            raw.reverse()
 
 
             # ==================================================================
             # PROCESSA NOVOS CONCURSOS
+            #
+            # O histórico é atualizado mesmo quando o bot está parado.
+            # Isso permite que, quando o usuário clicar em INICIAR,
+            # o algoritmo tenha contexto recente.
             # ==================================================================
 
             for item in raw:
@@ -416,6 +553,17 @@ def bot_loop():
 
 
             # ==================================================================
+            # SE BOT ESTÁ PARADO
+            # ==================================================================
+
+            if not bot_running:
+
+                time.sleep(2)
+
+                continue
+
+
+            # ==================================================================
             # PROCESSA CADA NOVO RESULTADO
             # ==================================================================
 
@@ -463,9 +611,9 @@ def bot_loop():
 
                         if is_violet_win:
 
-                            # ----------------------------------------------
+                            # --------------------------------------------------
                             # VITÓRIA DE 0,5
-                            # ----------------------------------------------
+                            # --------------------------------------------------
 
                             wins_05 += 1
 
@@ -475,16 +623,18 @@ def bot_loop():
 
                             add_log(
                                 f"🟣 VITÓRIA VIOLET! "
-                                f"0/5 caiu! +R$ {profit_add:.2f}"
+                                f"0/5 caiu! "
+                                f"+R$ {profit_add:.2f}"
                             )
 
                             acao_db = "VITORIA_05"
 
+
                         else:
 
-                            # ----------------------------------------------
+                            # --------------------------------------------------
                             # VITÓRIA DE 1,0
-                            # ----------------------------------------------
+                            # --------------------------------------------------
 
                             wins_10 += 1
 
@@ -745,7 +895,7 @@ def bot_loop():
         except Exception as e:
 
             add_log(
-                f"Erro no loop: {e}"
+                f"⚠️ Erro no loop: {e}"
             )
 
 
@@ -770,6 +920,30 @@ app = Flask(__name__)
 
 
 # ==============================================================================
+# CONTROLE MANUAL - INICIAR
+# ==============================================================================
+
+@app.route("/start", methods=["POST"])
+def start():
+
+    start_bot()
+
+    return redirect("/")
+
+
+# ==============================================================================
+# CONTROLE MANUAL - PARAR
+# ==============================================================================
+
+@app.route("/stop", methods=["POST"])
+def stop():
+
+    stop_bot()
+
+    return redirect("/")
+
+
+# ==============================================================================
 # HTML
 # ==============================================================================
 
@@ -787,7 +961,6 @@ HTML_TEMPLATE = """
       content="width=device-width, initial-scale=1.0">
 
 <meta http-equiv="refresh" content="10">
-
 
 <title>Bot Aposta Fixa</title>
 
@@ -868,6 +1041,10 @@ body {
     align-items: center;
 
     margin-bottom: 20px;
+
+    gap: 15px;
+
+    flex-wrap: wrap;
 }
 
 
@@ -878,6 +1055,18 @@ body {
     font-weight: 900;
 
     color: var(--purple);
+}
+
+
+.header-controls {
+
+    display: flex;
+
+    gap: 10px;
+
+    align-items: center;
+
+    flex-wrap: wrap;
 }
 
 
@@ -896,6 +1085,57 @@ body {
     font-size: 14px;
 
     font-weight: 700;
+}
+
+
+.live-badge.stopped {
+
+    background: rgba(255,82,82,0.1);
+
+    border-color: var(--red);
+
+    color: var(--red);
+}
+
+
+.btn {
+
+    border: none;
+
+    padding: 11px 18px;
+
+    border-radius: 10px;
+
+    font-weight: 800;
+
+    font-size: 13px;
+
+    cursor: pointer;
+
+    transition: 0.2s;
+
+}
+
+
+.btn:hover {
+
+    transform: scale(1.03);
+}
+
+
+.btn-start {
+
+    background: var(--green);
+
+    color: #000;
+}
+
+
+.btn-stop {
+
+    background: var(--red);
+
+    color: #fff;
 }
 
 
@@ -1124,16 +1364,6 @@ body {
 }
 
 
-.log-time {
-
-    color: var(--text-muted);
-
-    margin-right: 15px;
-
-    font-size: 12px;
-}
-
-
 .log-vitoria {
 
     color: var(--green);
@@ -1263,6 +1493,28 @@ body {
 }
 
 
+.session-label {
+
+    margin-bottom: 15px;
+
+    padding: 12px;
+
+    border-radius: 12px;
+
+    background: rgba(188,82,255,0.08);
+
+    border: 1px solid rgba(188,82,255,0.2);
+
+    color: var(--purple);
+
+    text-align: center;
+
+    font-weight: 700;
+
+    font-size: 13px;
+}
+
+
 @media (max-width: 900px) {
 
     .stats-grid {
@@ -1293,6 +1545,18 @@ body {
         height: 250px;
     }
 
+    .header {
+
+        flex-direction: column;
+
+        align-items: stretch;
+    }
+
+    .header-controls {
+
+        justify-content: center;
+    }
+
 }
 
 </style>
@@ -1316,9 +1580,67 @@ body {
             🤖 Bot Aposta Fixa
         </div>
 
-        <div class="live-badge">
-            ● LIVE
+
+        <div class="header-controls">
+
+            {% if running %}
+
+                <div class="live-badge">
+                    ● OPERANDO
+                </div>
+
+                <form method="POST" action="/stop">
+
+                    <button
+                        type="submit"
+                        class="btn btn-stop">
+
+                        ⏹ PARAR BOT
+
+                    </button>
+
+                </form>
+
+            {% else %}
+
+                <div class="live-badge stopped">
+                    ● PARADO
+                </div>
+
+                <form method="POST" action="/start">
+
+                    <button
+                        type="submit"
+                        class="btn btn-start">
+
+                        ▶ INICIAR BOT
+
+                    </button>
+
+                </form>
+
+            {% endif %}
+
         </div>
+
+    </div>
+
+
+    <!-- ================================================================ -->
+    <!-- STATUS DA SESSÃO -->
+    <!-- ================================================================ -->
+
+    <div class="session-label">
+
+        {% if running %}
+
+            🟢 SESSÃO ATIVA — CONTABILIZANDO RESULTADOS
+
+        {% else %}
+
+            🔴 SESSÃO PARADA — RESULTADO CONGELADO
+
+        {% endif %}
 
     </div>
 
@@ -1358,7 +1680,7 @@ body {
         <div class="card">
 
             <div class="card-title">
-                Saldo (R$)
+                Saldo da Sessão (R$)
             </div>
 
             <div class="card-value profit-text
@@ -1464,7 +1786,19 @@ body {
                 Status do Bot
             </div>
 
-            {% if state == 'ACOMPANHANDO' %}
+
+            {% if not running %}
+
+                <div
+                    class="status-hunting"
+                    style="color: var(--red);">
+
+                    ⏹ BOT PARADO
+
+                </div>
+
+
+            {% elif state == 'ACOMPANHANDO' %}
 
                 <div class="status-accompanying
                     {{ 'signal-green'
@@ -1476,6 +1810,7 @@ body {
                        else 'ENTRAR RED' }}
 
                 </div>
+
 
             {% else %}
 
@@ -1570,9 +1905,26 @@ body {
 
             <div class="history-title">
 
-                📜 Histórico de Sinais
+                📜 Histórico da Sessão
 
             </div>
+
+
+            {% if not history_results %}
+
+                <div
+                    style="
+                        color: var(--text-muted);
+                        text-align: center;
+                        padding: 30px 5px;
+                        font-size: 13px;
+                    ">
+
+                    Nenhuma operação realizada nesta sessão.
+
+                </div>
+
+            {% endif %}
 
 
             {% for item in history_results|reverse %}
@@ -1675,13 +2027,19 @@ def home():
     total_jogos = wins + losses
 
 
-    # Aproveitamento
+    # ==================================================================
+    # APROVEITAMENTO
+    # ==================================================================
+
     win_rate = (
+
         round(
             (wins / total_jogos) * 100,
             1
         )
+
         if total_jogos > 0
+
         else 0.0
     )
 
@@ -1712,7 +2070,9 @@ def home():
 
         signal=signal_color,
 
-        history_results=history_results
+        history_results=history_results,
+
+        running=bot_running
     )
 
 
@@ -1722,21 +2082,40 @@ def home():
 
 if __name__ == "__main__":
 
-    # ⚠️ ZERA O BANCO AO REINICIAR
+    # ==================================================================
+    # INICIALIZA BANCO
+    #
+    # NÃO APAGA DADOS ANTERIORES
+    # ==================================================================
+
     init_db()
 
 
-    # Inicia bot em segundo plano
-    t = threading.Thread(
-        target=bot_loop
-    )
+    # ==================================================================
+    # BOT COMEÇA PARADO
+    # ==================================================================
 
-    t.daemon = True
+    bot_running = False
+
+    bot_state = "PARADO"
+
+
+    # ==================================================================
+    # INICIA THREAD DO BOT
+    # ==================================================================
+
+    t = threading.Thread(
+        target=bot_loop,
+        daemon=True
+    )
 
     t.start()
 
 
-    # Porta
+    # ==================================================================
+    # PORTA
+    # ==================================================================
+
     port = int(
         os.environ.get(
             "PORT",
@@ -1745,7 +2124,10 @@ if __name__ == "__main__":
     )
 
 
-    # Inicia servidor
+    # ==================================================================
+    # INICIA SERVIDOR
+    # ==================================================================
+
     app.run(
         host="0.0.0.0",
         port=port
