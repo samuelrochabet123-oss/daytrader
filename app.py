@@ -47,6 +47,17 @@ PREJUIZO_DERROTA = 1.0
 
 
 # ==============================================================================
+# CONFIGURAÇÃO DA CONFLUÊNCIA
+# ==============================================================================
+
+# Quantidade mínima de estratégias concordando
+MIN_CONFLUENCIA = 2
+
+# Existem 5 estratégias.
+TOTAL_ESTRATEGIAS = 5
+
+
+# ==============================================================================
 # VARIÁVEIS GLOBAIS DE MEMÓRIA
 # ==============================================================================
 
@@ -107,7 +118,7 @@ def get_db_connection():
 
         return psycopg2.connect(database_url)
 
-    except Exception as e:
+    except Exception:
 
         return None
 
@@ -121,17 +132,14 @@ def init_db():
     conn = get_db_connection()
 
     if not conn:
+
         add_log("⚠️ Banco de dados não configurado.")
+
         return
 
     try:
 
         with conn.cursor() as cur:
-
-            # ==============================================================
-            # IMPORTANTE:
-            # NÃO APAGA MAIS AS TABELAS AO REINICIAR
-            # ==============================================================
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS historico (
@@ -154,10 +162,6 @@ def init_db():
                 );
             """)
 
-            # ==============================================================
-            # GARANTE QUE EXISTE UM PLACAR
-            # ==============================================================
-
             cur.execute("""
                 INSERT INTO placar
                 (id, wins, wins_05, wins_10, losses, profit)
@@ -174,7 +178,9 @@ def init_db():
 
     except Exception as e:
 
-        add_log(f"⚠️ Erro ao inicializar banco: {e}")
+        add_log(
+            f"⚠️ Erro ao inicializar banco: {e}"
+        )
 
 
 # ==============================================================================
@@ -215,7 +221,9 @@ def update_placar_in_db():
 
     except Exception as e:
 
-        add_log(f"⚠️ Erro ao atualizar placar: {e}")
+        add_log(
+            f"⚠️ Erro ao atualizar placar: {e}"
+        )
 
 
 # ==============================================================================
@@ -252,7 +260,9 @@ def save_game_to_db(issue, cor, numero, acao):
 
     except Exception as e:
 
-        add_log(f"⚠️ Erro ao salvar histórico: {e}")
+        add_log(
+            f"⚠️ Erro ao salvar histórico: {e}"
+        )
 
 
 # ==============================================================================
@@ -290,10 +300,6 @@ def start_bot():
 
     with bot_lock:
 
-        # ==============================================================
-        # NOVA SESSÃO FINANCEIRA
-        # ==============================================================
-
         wins = 0
         wins_05 = 0
         wins_10 = 0
@@ -301,19 +307,11 @@ def start_bot():
 
         current_profit = 0.0
 
-        # ==============================================================
-        # LIMPA OPERAÇÃO ANTERIOR
-        # ==============================================================
-
         bot_state = "CACANDO"
 
         signal_color = None
 
         history_results = []
-
-        # ==============================================================
-        # ATIVA BOT
-        # ==============================================================
 
         bot_running = True
 
@@ -412,19 +410,15 @@ def normalize_color(c, num=None):
 
     if num is not None:
 
-        # 0 = Violet
         if num == 0:
             return "V"
 
-        # 5 = Violet
         if num == 5:
             return "V"
 
-        # Pares = Red
         if num % 2 == 0:
             return "R"
 
-        # Ímpares = Green
         return "G"
 
     c = str(c).lower()
@@ -439,6 +433,321 @@ def normalize_color(c, num=None):
         return "G"
 
     return None
+
+
+# ==============================================================================
+# SISTEMA DE ESTRATÉGIAS
+# ==============================================================================
+
+def calcular_estrategias():
+
+    """
+    Analisa somente os resultados ANTERIORES.
+
+    Retorna um dicionário contendo o sinal de cada estratégia.
+
+    Estratégias:
+
+    1. Soma dos últimos 5 >= 36 -> R
+    2. 4 ou 5 números altos nos últimos 5 -> R
+    3. G + G -> R
+    4. Última cor V -> G
+    5. Pelo menos 2 dos últimos 3 números altos -> R
+    """
+
+    sinais = {}
+
+    motivos = {}
+
+    # --------------------------------------------------------------------------
+    # ESTRATÉGIA 1
+    # SOMA DOS ÚLTIMOS 5 >= 36 -> R
+    # --------------------------------------------------------------------------
+
+    if len(history_numbers) >= 5:
+
+        ultimos_5 = history_numbers[-5:]
+
+        soma_5 = sum(ultimos_5)
+
+        if soma_5 >= 36:
+
+            sinais["SOMA5_36"] = "R"
+
+            motivos["SOMA5_36"] = (
+                f"Soma5={soma_5} >= 36"
+            )
+
+        else:
+
+            sinais["SOMA5_36"] = None
+
+    else:
+
+        sinais["SOMA5_36"] = None
+
+
+    # --------------------------------------------------------------------------
+    # ESTRATÉGIA 2
+    # 4 OU 5 NÚMEROS ALTOS NOS ÚLTIMOS 5
+    #
+    # Alto = >= 7
+    # --------------------------------------------------------------------------
+
+    if len(history_numbers) >= 5:
+
+        ultimos_5 = history_numbers[-5:]
+
+        qtd_altos = sum(
+            1 for n in ultimos_5
+            if n >= 7
+        )
+
+        if qtd_altos >= 4:
+
+            sinais["ALTOS5_4"] = "R"
+
+            motivos["ALTOS5_4"] = (
+                f"{qtd_altos}/5 números altos"
+            )
+
+        else:
+
+            sinais["ALTOS5_4"] = None
+
+    else:
+
+        sinais["ALTOS5_4"] = None
+
+
+    # --------------------------------------------------------------------------
+    # ESTRATÉGIA 3
+    # G + G -> R
+    # --------------------------------------------------------------------------
+
+    if len(history_colors) >= 2:
+
+        ultima_cor = history_colors[-1]
+
+        penultima_cor = history_colors[-2]
+
+        if (
+            penultima_cor == "G"
+            and
+            ultima_cor == "G"
+        ):
+
+            sinais["GG_R"] = "R"
+
+            motivos["GG_R"] = "G + G"
+
+
+        else:
+
+            sinais["GG_R"] = None
+
+    else:
+
+        sinais["GG_R"] = None
+
+
+    # --------------------------------------------------------------------------
+    # ESTRATÉGIA 4
+    # V -> G
+    # --------------------------------------------------------------------------
+
+    if len(history_colors) >= 1:
+
+        ultima_cor = history_colors[-1]
+
+        if ultima_cor == "V":
+
+            sinais["V_G"] = "G"
+
+            motivos["V_G"] = "Última cor = V"
+
+        else:
+
+            sinais["V_G"] = None
+
+    else:
+
+        sinais["V_G"] = None
+
+
+    # --------------------------------------------------------------------------
+    # ESTRATÉGIA 5
+    # 2 OU 3 NÚMEROS ALTOS NOS ÚLTIMOS 3 -> R
+    #
+    # Alto = >= 7
+    # --------------------------------------------------------------------------
+
+    if len(history_numbers) >= 3:
+
+        ultimos_3 = history_numbers[-3:]
+
+        qtd_altos = sum(
+            1 for n in ultimos_3
+            if n >= 7
+        )
+
+        if qtd_altos >= 2:
+
+            sinais["ALTOS3_2"] = "R"
+
+            motivos["ALTOS3_2"] = (
+                f"{qtd_altos}/3 números altos"
+            )
+
+        else:
+
+            sinais["ALTOS3_2"] = None
+
+    else:
+
+        sinais["ALTOS3_2"] = None
+
+
+    return sinais, motivos
+
+
+# ==============================================================================
+# SISTEMA DE CONFLUÊNCIA
+# ==============================================================================
+
+def calcular_confluencia():
+
+    sinais, motivos = calcular_estrategias()
+
+    votos_r = []
+    votos_g = []
+
+    # --------------------------------------------------------------------------
+    # SEPARA OS VOTOS
+    # --------------------------------------------------------------------------
+
+    for estrategia, sinal in sinais.items():
+
+        if sinal == "R":
+
+            votos_r.append(estrategia)
+
+        elif sinal == "G":
+
+            votos_g.append(estrategia)
+
+
+    qtd_r = len(votos_r)
+
+    qtd_g = len(votos_g)
+
+
+    # --------------------------------------------------------------------------
+    # SEM VOTOS
+    # --------------------------------------------------------------------------
+
+    if qtd_r == 0 and qtd_g == 0:
+
+        return {
+            "sinal": None,
+            "confluencia": 0,
+            "votos_r": votos_r,
+            "votos_g": votos_g,
+            "sinais": sinais,
+            "motivos": motivos
+        }
+
+
+    # --------------------------------------------------------------------------
+    # MAIORIA RED
+    # --------------------------------------------------------------------------
+
+    if (
+        qtd_r >= MIN_CONFLUENCIA
+        and
+        qtd_r > qtd_g
+    ):
+
+        return {
+            "sinal": "R",
+            "confluencia": qtd_r,
+            "votos_r": votos_r,
+            "votos_g": votos_g,
+            "sinais": sinais,
+            "motivos": motivos
+        }
+
+
+    # --------------------------------------------------------------------------
+    # MAIORIA GREEN
+    # --------------------------------------------------------------------------
+
+    if (
+        qtd_g >= MIN_CONFLUENCIA
+        and
+        qtd_g > qtd_r
+    ):
+
+        return {
+            "sinal": "G",
+            "confluencia": qtd_g,
+            "votos_r": votos_r,
+            "votos_g": votos_g,
+            "sinais": sinais,
+            "motivos": motivos
+        }
+
+
+    # --------------------------------------------------------------------------
+    # CONFLUÊNCIA INSUFICIENTE
+    # --------------------------------------------------------------------------
+
+    return {
+        "sinal": None,
+        "confluencia": max(qtd_r, qtd_g),
+        "votos_r": votos_r,
+        "votos_g": votos_g,
+        "sinais": sinais,
+        "motivos": motivos
+    }
+
+
+# ==============================================================================
+# FORMATA ESTRATÉGIAS PARA LOG
+# ==============================================================================
+
+def formatar_estrategias(resultado):
+
+    partes = []
+
+    nomes = {
+        "SOMA5_36": "Soma5≥36",
+        "ALTOS5_4": "4/5 Altos",
+        "GG_R": "GG→R",
+        "V_G": "V→G",
+        "ALTOS3_2": "2/3 Altos"
+    }
+
+    for estrategia, sinal in resultado["sinais"].items():
+
+        nome = nomes.get(
+            estrategia,
+            estrategia
+        )
+
+        if sinal:
+
+            partes.append(
+                f"{nome}={sinal}"
+            )
+
+        else:
+
+            partes.append(
+                f"{nome}=—"
+            )
+
+    return " | ".join(partes)
 
 
 # ==============================================================================
@@ -482,18 +791,14 @@ def bot_loop():
 
 
             # ==================================================================
-            # ORGANIZA ORDEM DOS RESULTADOS
+            # ORGANIZA ORDEM
             # ==================================================================
 
             raw.reverse()
 
 
             # ==================================================================
-            # PROCESSA NOVOS CONCURSOS
-            #
-            # O histórico é atualizado mesmo quando o bot está parado.
-            # Isso permite que, quando o usuário clicar em INICIAR,
-            # o algoritmo tenha contexto recente.
+            # PROCESSA NOVOS RESULTADOS
             # ==================================================================
 
             for item in raw:
@@ -528,28 +833,30 @@ def bot_loop():
                     issue not in processed_issues
                 ):
 
-                    history_colors.append(cor)
-
-                    history_numbers.append(num)
-
-                    processed_issues.add(issue)
-
                     novos.append({
                         "issue": issue,
                         "cor": cor,
                         "num": num
                     })
 
+                    processed_issues.add(issue)
+
 
             # ==================================================================
-            # MANTÉM ÚLTIMOS 50 NÚMEROS
+            # IMPORTANTE:
+            #
+            # O histórico NÃO é atualizado aqui.
+            #
+            # Cada resultado será processado individualmente.
+            #
+            # Primeiro usamos o histórico anterior para avaliar:
+            #
+            #     "qual seria o sinal?"
+            #
+            # Depois adicionamos o resultado ao histórico.
+            #
+            # Isso evita que o resultado atual influencie seu próprio sinal.
             # ==================================================================
-
-            if len(history_numbers) > 50:
-
-                history_numbers = history_numbers[-50:]
-
-                history_colors = history_colors[-50:]
 
 
             # ==================================================================
@@ -557,6 +864,31 @@ def bot_loop():
             # ==================================================================
 
             if not bot_running:
+
+                for jogo in novos:
+
+                    history_numbers.append(
+                        jogo["num"]
+                    )
+
+                    history_colors.append(
+                        jogo["cor"]
+                    )
+
+                    save_game_to_db(
+                        jogo["issue"],
+                        jogo["cor"],
+                        jogo["num"],
+                        "AGUARDANDO"
+                    )
+
+
+                if len(history_numbers) > 50:
+
+                    history_numbers = history_numbers[-50:]
+
+                    history_colors = history_colors[-50:]
+
 
                 time.sleep(2)
 
@@ -596,30 +928,24 @@ def bot_loop():
                         )
                     ):
 
-                        # ======================================================
-                        # VITÓRIA VIOLET
-                        # ======================================================
-
                         is_violet_win = (
                             cor == "V"
                         )
 
-
-                        # Vitória total
                         wins += 1
 
 
                         if is_violet_win:
 
-                            # --------------------------------------------------
-                            # VITÓRIA DE 0,5
-                            # --------------------------------------------------
-
                             wins_05 += 1
 
-                            profit_add = LUCRO_BASE_VIOLET
+                            profit_add = (
+                                LUCRO_BASE_VIOLET
+                            )
 
-                            resultado_tipo = "VITÓRIA 0,5"
+                            resultado_tipo = (
+                                "VITÓRIA 0,5"
+                            )
 
                             add_log(
                                 f"🟣 VITÓRIA VIOLET! "
@@ -632,15 +958,15 @@ def bot_loop():
 
                         else:
 
-                            # --------------------------------------------------
-                            # VITÓRIA DE 1,0
-                            # --------------------------------------------------
-
                             wins_10 += 1
 
-                            profit_add = LUCRO_BASE
+                            profit_add = (
+                                LUCRO_BASE
+                            )
 
-                            resultado_tipo = "VITÓRIA 1,0"
+                            resultado_tipo = (
+                                "VITÓRIA 1,0"
+                            )
 
                             add_log(
                                 f"✅ VITÓRIA! "
@@ -651,16 +977,10 @@ def bot_loop():
                             acao_db = "VITORIA_10"
 
 
-                        # ------------------------------------------------------
-                        # ATUALIZA SALDO
-                        # ------------------------------------------------------
+                        current_profit += (
+                            profit_add
+                        )
 
-                        current_profit += profit_add
-
-
-                        # ------------------------------------------------------
-                        # HISTÓRICO VISUAL
-                        # ------------------------------------------------------
 
                         history_results.append({
                             "issue": issue,
@@ -670,18 +990,10 @@ def bot_loop():
                         })
 
 
-                        # ------------------------------------------------------
-                        # RESET DO ESTADO
-                        # ------------------------------------------------------
-
                         bot_state = "CACANDO"
 
                         signal_color = None
 
-
-                        # ------------------------------------------------------
-                        # BANCO
-                        # ------------------------------------------------------
 
                         update_placar_in_db()
 
@@ -701,7 +1013,9 @@ def bot_loop():
 
                         losses += 1
 
-                        current_profit -= PREJUIZO_DERROTA
+                        current_profit -= (
+                            PREJUIZO_DERROTA
+                        )
 
 
                         history_results.append({
@@ -733,10 +1047,6 @@ def bot_loop():
                         )
 
 
-                    # ----------------------------------------------------------
-                    # MANTÉM ÚLTIMOS 15 RESULTADOS
-                    # ----------------------------------------------------------
-
                     if len(history_results) > 15:
 
                         history_results.pop(0)
@@ -748,122 +1058,111 @@ def bot_loop():
 
                 else:
 
+                    # ----------------------------------------------------------
+                    # CALCULA CONFLUÊNCIA ANTES DE ADICIONAR O NOVO RESULTADO
+                    # ----------------------------------------------------------
+
                     if len(history_numbers) >= 3:
 
-                        soma_3 = sum(
-                            history_numbers[-3:]
+                        resultado = (
+                            calcular_confluencia()
                         )
 
-                        last_num = history_numbers[-1]
+                        sinal_disparado = (
+                            resultado["sinal"]
+                        )
 
-                        prev_num = history_numbers[-2]
-
-                        prev2_num = history_numbers[-3]
-
-
-                        sinal_disparado = None
-
-                        motivo = ""
+                        confluencia = (
+                            resultado["confluencia"]
+                        )
 
 
-                        # ======================================================
-                        # REGRA 1
-                        # ======================================================
+                        # ------------------------------------------------------
+                        # MOSTRA VOTOS
+                        # ------------------------------------------------------
 
-                        if soma_3 <= 4:
-
-                            sinal_disparado = "G"
-
-                            motivo = (
-                                f"Soma(3) = {soma_3} (<=4)"
-                            )
+                        add_log(
+                            f"📊 "
+                            f"{formatar_estrategias(resultado)}"
+                        )
 
 
-                        # ======================================================
-                        # REGRA 2
-                        # ======================================================
-
-                        elif (
-                            last_num >= 8
-                            and
-                            prev_num >= 8
-                        ):
-
-                            sinal_disparado = "R"
-
-                            motivo = (
-                                f"Duplo Teto "
-                                f"({prev_num},{last_num})"
-                            )
-
-
-                        # ======================================================
-                        # REGRA 3
-                        # ======================================================
-
-                        elif (
-                            last_num >= 7
-                            and
-                            prev_num >= 7
-                            and
-                            prev2_num <= 4
-                        ):
-
-                            sinal_disparado = "R"
-
-                            motivo = (
-                                f"Teto Isolado "
-                                f"({prev2_num},{prev_num},{last_num})"
-                            )
-
-
-                        # ======================================================
-                        # REGRA 4
-                        # ======================================================
-
-                        elif (
-                            last_num >= 7
-                            and
-                            prev_num >= 6
-                        ):
-
-                            sinal_disparado = "R"
-
-                            motivo = (
-                                f"Teto Relax "
-                                f"({prev_num},{last_num})"
-                            )
-
-
-                        # ======================================================
+                        # ------------------------------------------------------
                         # DISPARO
-                        # ======================================================
+                        # ------------------------------------------------------
 
                         if sinal_disparado:
 
                             bot_state = "ACOMPANHANDO"
 
-                            signal_color = sinal_disparado
+                            signal_color = (
+                                sinal_disparado
+                            )
 
 
                             cor_sinal = (
+
                                 "🟢 GREEN"
+
                                 if sinal_disparado == "G"
+
                                 else
+
                                 "🔴 RED"
+                            )
+
+
+                            votos_r = (
+                                len(resultado["votos_r"])
+                            )
+
+                            votos_g = (
+                                len(resultado["votos_g"])
                             )
 
 
                             add_log(
                                 f"{cor_sinal} "
-                                f"🚨 SINAL SNIPER "
-                                f"({sinal_disparado}) 🚨"
+                                f"🚨 CONFLUÊNCIA "
+                                f"{confluencia}/"
+                                f"{TOTAL_ESTRATEGIAS} 🚨"
                             )
 
 
                             add_log(
-                                f"Regra: {motivo}"
+                                f"📊 Votos: "
+                                f"R={votos_r} | "
+                                f"G={votos_g}"
                             )
+
+
+                            # --------------------------------------------------
+                            # MOSTRA MOTIVOS
+                            # --------------------------------------------------
+
+                            for estrategia in resultado["sinais"]:
+
+                                sinal = (
+                                    resultado["sinais"]
+                                    [estrategia]
+                                )
+
+                                if sinal:
+
+                                    motivo = (
+                                        resultado["motivos"]
+                                        .get(
+                                            estrategia,
+                                            ""
+                                        )
+                                    )
+
+                                    add_log(
+                                        f"   ↳ "
+                                        f"{estrategia}: "
+                                        f"{sinal} "
+                                        f"({motivo})"
+                                    )
 
 
                             add_log(
@@ -878,11 +1177,37 @@ def bot_loop():
                                 issue,
                                 cor,
                                 num,
-                                f"SINAL {signal_color}"
+                                f"SINAL "
+                                f"{signal_color} "
+                                f"CONFLUENCIA "
+                                f"{confluencia}/"
+                                f"{TOTAL_ESTRATEGIAS}"
                             )
 
 
                         else:
+
+                            # --------------------------------------------------
+                            # NÃO HOUVE CONFLUÊNCIA
+                            # --------------------------------------------------
+
+                            votos_r = (
+                                len(resultado["votos_r"])
+                            )
+
+                            votos_g = (
+                                len(resultado["votos_g"])
+                            )
+
+
+                            if votos_r or votos_g:
+
+                                add_log(
+                                    f"⚪ SEM ENTRADA — "
+                                    f"R={votos_r} | "
+                                    f"G={votos_g}"
+                                )
+
 
                             save_game_to_db(
                                 issue,
@@ -890,6 +1215,42 @@ def bot_loop():
                                 num,
                                 "AGUARDANDO"
                             )
+
+
+                    else:
+
+                        save_game_to_db(
+                            issue,
+                            cor,
+                            num,
+                            "AGUARDANDO"
+                        )
+
+
+                # ==============================================================
+                # AGORA SIM:
+                #
+                # adiciona o resultado ao histórico.
+                # ==============================================================
+
+                history_numbers.append(num)
+
+                history_colors.append(cor)
+
+
+                # --------------------------------------------------------------
+                # LIMITA MEMÓRIA
+                # --------------------------------------------------------------
+
+                if len(history_numbers) > 50:
+
+                    history_numbers = (
+                        history_numbers[-50:]
+                    )
+
+                    history_colors = (
+                        history_colors[-50:]
+                    )
 
 
         except Exception as e:
@@ -963,7 +1324,6 @@ HTML_TEMPLATE = """
 <meta http-equiv="refresh" content="10">
 
 <title>Bot Aposta Fixa</title>
-
 
 <style>
 
@@ -1113,7 +1473,6 @@ body {
     cursor: pointer;
 
     transition: 0.2s;
-
 }
 
 
@@ -1570,14 +1929,12 @@ body {
 <div class="container">
 
 
-    <!-- ================================================================ -->
-    <!-- HEADER -->
-    <!-- ================================================================ -->
-
     <div class="header">
 
         <div class="logo-text">
-            🤖 Bot Aposta Fixa
+
+            🤖 Bot Confluência
+
         </div>
 
 
@@ -1586,7 +1943,9 @@ body {
             {% if running %}
 
                 <div class="live-badge">
+
                     ● OPERANDO
+
                 </div>
 
                 <form method="POST" action="/stop">
@@ -1604,7 +1963,9 @@ body {
             {% else %}
 
                 <div class="live-badge stopped">
+
                     ● PARADO
+
                 </div>
 
                 <form method="POST" action="/start">
@@ -1626,10 +1987,6 @@ body {
     </div>
 
 
-    <!-- ================================================================ -->
-    <!-- STATUS DA SESSÃO -->
-    <!-- ================================================================ -->
-
     <div class="session-label">
 
         {% if running %}
@@ -1644,10 +2001,6 @@ body {
 
     </div>
 
-
-    <!-- ================================================================ -->
-    <!-- ÚLTIMOS NÚMEROS -->
-    <!-- ================================================================ -->
 
     <div class="trend-strip">
 
@@ -1668,19 +2021,15 @@ body {
     </div>
 
 
-    <!-- ================================================================ -->
-    <!-- ESTATÍSTICAS -->
-    <!-- ================================================================ -->
-
     <div class="stats-grid">
 
-
-        <!-- SALDO -->
 
         <div class="card">
 
             <div class="card-title">
+
                 Saldo da Sessão (R$)
+
             </div>
 
             <div class="card-value profit-text
@@ -1693,12 +2042,12 @@ body {
         </div>
 
 
-        <!-- VITÓRIAS TOTAIS -->
-
         <div class="card">
 
             <div class="card-title">
+
                 Vitórias
+
             </div>
 
             <div class="card-value win-text">
@@ -1710,12 +2059,12 @@ body {
         </div>
 
 
-        <!-- VITÓRIAS 1.0 -->
-
         <div class="card">
 
             <div class="card-title">
+
                 Vitórias 1,0
+
             </div>
 
             <div class="card-value win-text">
@@ -1727,12 +2076,12 @@ body {
         </div>
 
 
-        <!-- VITÓRIAS 0.5 -->
-
         <div class="card">
 
             <div class="card-title">
+
                 Vitórias 0,5
+
             </div>
 
             <div class="card-value violet-text">
@@ -1744,12 +2093,12 @@ body {
         </div>
 
 
-        <!-- DERROTAS -->
-
         <div class="card">
 
             <div class="card-title">
+
                 Derrotas
+
             </div>
 
             <div class="card-value loss-text">
@@ -1761,12 +2110,12 @@ body {
         </div>
 
 
-        <!-- APROVEITAMENTO -->
-
         <div class="card">
 
             <div class="card-title">
+
                 Aproveit.
+
             </div>
 
             <div class="card-value rate-text">
@@ -1778,12 +2127,12 @@ body {
         </div>
 
 
-        <!-- STATUS -->
-
         <div class="card">
 
             <div class="card-title">
+
                 Status do Bot
+
             </div>
 
 
@@ -1816,7 +2165,7 @@ body {
 
                 <div class="status-hunting">
 
-                    CAÇANDO NÚMEROS
+                    CAÇANDO CONFLUÊNCIA
 
                 </div>
 
@@ -1828,16 +2177,8 @@ body {
     </div>
 
 
-    <!-- ================================================================ -->
-    <!-- PARTE INFERIOR -->
-    <!-- ================================================================ -->
-
     <div class="bottom-grid">
 
-
-        <!-- ============================================================ -->
-        <!-- CONSOLE -->
-        <!-- ============================================================ -->
 
         <div class="console" id="consoleBox">
 
@@ -1870,7 +2211,7 @@ body {
                     </div>
 
 
-                {% elif 'SINAL' in line
+                {% elif 'CONFLUÊNCIA' in line
                       or '🟣' in line
                       or '🟢' in line
                       or '🔴' in line %}
@@ -1896,10 +2237,6 @@ body {
 
         </div>
 
-
-        <!-- ============================================================ -->
-        <!-- HISTÓRICO -->
-        <!-- ============================================================ -->
 
         <div class="history-card">
 
@@ -2027,21 +2364,16 @@ def home():
     total_jogos = wins + losses
 
 
-    # ==================================================================
-    # APROVEITAMENTO
-    # ==================================================================
+    if total_jogos > 0:
 
-    win_rate = (
-
-        round(
+        win_rate = round(
             (wins / total_jogos) * 100,
             1
         )
 
-        if total_jogos > 0
+    else:
 
-        else 0.0
-    )
+        win_rate = 0.0
 
 
     return render_template_string(
@@ -2082,27 +2414,13 @@ def home():
 
 if __name__ == "__main__":
 
-    # ==================================================================
-    # INICIALIZA BANCO
-    #
-    # NÃO APAGA DADOS ANTERIORES
-    # ==================================================================
-
     init_db()
 
-
-    # ==================================================================
-    # BOT COMEÇA PARADO
-    # ==================================================================
 
     bot_running = False
 
     bot_state = "PARADO"
 
-
-    # ==================================================================
-    # INICIA THREAD DO BOT
-    # ==================================================================
 
     t = threading.Thread(
         target=bot_loop,
@@ -2112,10 +2430,6 @@ if __name__ == "__main__":
     t.start()
 
 
-    # ==================================================================
-    # PORTA
-    # ==================================================================
-
     port = int(
         os.environ.get(
             "PORT",
@@ -2123,10 +2437,6 @@ if __name__ == "__main__":
         )
     )
 
-
-    # ==================================================================
-    # INICIA SERVIDOR
-    # ==================================================================
 
     app.run(
         host="0.0.0.0",
