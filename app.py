@@ -47,14 +47,14 @@ PREJUIZO_DERROTA = 1.0
 
 
 # ==============================================================================
-# CONFIGURAÇÃO DA CONFLUÊNCIA
+# CONFIGURAÇÃO DA V3
 # ==============================================================================
 
 # Quantidade mínima de estratégias concordando
-MIN_CONFLUENCIA = 2
+MIN_CONFLUENCIA = 1
 
 # Existem 5 estratégias.
-TOTAL_ESTRATEGIAS = 5
+TOTAL_ESTRATEGIAS = 1
 
 
 # ==============================================================================
@@ -436,275 +436,56 @@ def normalize_color(c, num=None):
 
 
 # ==============================================================================
-# SISTEMA DE ESTRATÉGIAS
+# SISTEMA DE ESTRATÉGIA V3
 # ==============================================================================
 
+V3_BLOCKED_CONTEXTS = {"GVG", "GRV", "RVG"}
+
 def calcular_estrategias():
-
-    """
-    Analisa somente os resultados ANTERIORES.
-
-    Retorna um dicionário contendo o sinal de cada estratégia.
-
-    Estratégias:
-
-    1. Soma dos últimos 5 >= 36 -> R
-    2. 4 ou 5 números altos nos últimos 5 -> R
-    3. G + G -> R
-    4. Última cor V -> G
-    5. Pelo menos 2 dos últimos 3 números altos -> R
-    """
-
-    sinais = {}
-
-    motivos = {}
-
-    # --------------------------------------------------------------------------
-    # ESTRATÉGIA 1
-    # SOMA DOS ÚLTIMOS 5 >= 36 -> R
-    # --------------------------------------------------------------------------
-
-    if len(history_numbers) >= 5:
-
-        ultimos_5 = history_numbers[-5:]
-
-        soma_5 = sum(ultimos_5)
-
-        if soma_5 >= 36:
-
-            sinais["SOMA5_36"] = "R"
-
-            motivos["SOMA5_36"] = (
-                f"Soma5={soma_5} >= 36"
-            )
-
-        else:
-
-            sinais["SOMA5_36"] = None
-
-    else:
-
-        sinais["SOMA5_36"] = None
-
-
-    # --------------------------------------------------------------------------
-    # ESTRATÉGIA 2
-    # 4 OU 5 NÚMEROS ALTOS NOS ÚLTIMOS 5
-    #
-    # Alto = >= 7
-    # --------------------------------------------------------------------------
-
-    if len(history_numbers) >= 5:
-
-        ultimos_5 = history_numbers[-5:]
-
-        qtd_altos = sum(
-            1 for n in ultimos_5
-            if n >= 7
-        )
-
-        if qtd_altos >= 4:
-
-            sinais["ALTOS5_4"] = "R"
-
-            motivos["ALTOS5_4"] = (
-                f"{qtd_altos}/5 números altos"
-            )
-
-        else:
-
-            sinais["ALTOS5_4"] = None
-
-    else:
-
-        sinais["ALTOS5_4"] = None
-
-
-    # --------------------------------------------------------------------------
-    # ESTRATÉGIA 3
-    # G + G -> R
-    # --------------------------------------------------------------------------
-
-    if len(history_colors) >= 2:
-
-        ultima_cor = history_colors[-1]
-
-        penultima_cor = history_colors[-2]
-
-        if (
-            penultima_cor == "G"
-            and
-            ultima_cor == "G"
-        ):
-
-            sinais["GG_R"] = "R"
-
-            motivos["GG_R"] = "G + G"
-
-
-        else:
-
-            sinais["GG_R"] = None
-
-    else:
-
-        sinais["GG_R"] = None
-
-
-    # --------------------------------------------------------------------------
-    # ESTRATÉGIA 4
-    # V -> G
-    # --------------------------------------------------------------------------
-
-    if len(history_colors) >= 1:
-
-        ultima_cor = history_colors[-1]
-
-        if ultima_cor == "V":
-
-            sinais["V_G"] = "G"
-
-            motivos["V_G"] = "Última cor = V"
-
-        else:
-
-            sinais["V_G"] = None
-
-    else:
-
-        sinais["V_G"] = None
-
-
-    # --------------------------------------------------------------------------
-    # ESTRATÉGIA 5
-    # 2 OU 3 NÚMEROS ALTOS NOS ÚLTIMOS 3 -> R
-    #
-    # Alto = >= 7
-    # --------------------------------------------------------------------------
-
-    if len(history_numbers) >= 3:
-
-        ultimos_3 = history_numbers[-3:]
-
-        qtd_altos = sum(
-            1 for n in ultimos_3
-            if n >= 7
-        )
-
-        if qtd_altos >= 2:
-
-            sinais["ALTOS3_2"] = "R"
-
-            motivos["ALTOS3_2"] = (
-                f"{qtd_altos}/3 números altos"
-            )
-
-        else:
-
-            sinais["ALTOS3_2"] = None
-
-    else:
-
-        sinais["ALTOS3_2"] = None
-
-
+    """V3: inverte a última cor R/G e bloqueia os 3 contextos testados."""
+    sinais = {"V3_INVERTE": None}
+    motivos = {"V3_INVERTE": "Sem sinal"}
+
+    if len(history_colors) < 3:
+        motivos["V3_INVERTE"] = "Aguardando 3 resultados anteriores"
+        return sinais, motivos
+
+    ultima = history_colors[-1]
+    trio = "".join(history_colors[-3:])
+
+    if ultima == "V":
+        motivos["V3_INVERTE"] = "Última cor = V; sem inversão"
+        return sinais, motivos
+
+    if trio in V3_BLOCKED_CONTEXTS:
+        motivos["V3_INVERTE"] = f"Contexto bloqueado: {trio}"
+        return sinais, motivos
+
+    sinal = "G" if ultima == "R" else "R"
+    sinais["V3_INVERTE"] = sinal
+    motivos["V3_INVERTE"] = f"Inverte {ultima} → {sinal} | trio={trio}"
     return sinais, motivos
 
 
-# ==============================================================================
-# SISTEMA DE CONFLUÊNCIA
-# ==============================================================================
-
 def calcular_confluencia():
-
     sinais, motivos = calcular_estrategias()
+    votos_r = [k for k, v in sinais.items() if v == "R"]
+    votos_g = [k for k, v in sinais.items() if v == "G"]
+    qtd_r, qtd_g = len(votos_r), len(votos_g)
 
-    votos_r = []
-    votos_g = []
-
-    # --------------------------------------------------------------------------
-    # SEPARA OS VOTOS
-    # --------------------------------------------------------------------------
-
-    for estrategia, sinal in sinais.items():
-
-        if sinal == "R":
-
-            votos_r.append(estrategia)
-
-        elif sinal == "G":
-
-            votos_g.append(estrategia)
-
-
-    qtd_r = len(votos_r)
-
-    qtd_g = len(votos_g)
-
-
-    # --------------------------------------------------------------------------
-    # SEM VOTOS
-    # --------------------------------------------------------------------------
-
-    if qtd_r == 0 and qtd_g == 0:
-
-        return {
-            "sinal": None,
-            "confluencia": 0,
-            "votos_r": votos_r,
-            "votos_g": votos_g,
-            "sinais": sinais,
-            "motivos": motivos
-        }
-
-
-    # --------------------------------------------------------------------------
-    # MAIORIA RED
-    # --------------------------------------------------------------------------
-
-    if (
-        qtd_r >= MIN_CONFLUENCIA
-        and
-        qtd_r > qtd_g
-    ):
-
-        return {
-            "sinal": "R",
-            "confluencia": qtd_r,
-            "votos_r": votos_r,
-            "votos_g": votos_g,
-            "sinais": sinais,
-            "motivos": motivos
-        }
-
-
-    # --------------------------------------------------------------------------
-    # MAIORIA GREEN
-    # --------------------------------------------------------------------------
-
-    if (
-        qtd_g >= MIN_CONFLUENCIA
-        and
-        qtd_g > qtd_r
-    ):
-
-        return {
-            "sinal": "G",
-            "confluencia": qtd_g,
-            "votos_r": votos_r,
-            "votos_g": votos_g,
-            "sinais": sinais,
-            "motivos": motivos
-        }
-
-
-    # --------------------------------------------------------------------------
-    # CONFLUÊNCIA INSUFICIENTE
-    # --------------------------------------------------------------------------
+    if qtd_r > qtd_g and qtd_r >= MIN_CONFLUENCIA:
+        sinal = "R"
+        qtd = qtd_r
+    elif qtd_g > qtd_r and qtd_g >= MIN_CONFLUENCIA:
+        sinal = "G"
+        qtd = qtd_g
+    else:
+        sinal = None
+        qtd = max(qtd_r, qtd_g)
 
     return {
-        "sinal": None,
-        "confluencia": max(qtd_r, qtd_g),
+        "sinal": sinal,
+        "confluencia": qtd,
         "votos_r": votos_r,
         "votos_g": votos_g,
         "sinais": sinais,
@@ -712,45 +493,14 @@ def calcular_confluencia():
     }
 
 
-# ==============================================================================
-# FORMATA ESTRATÉGIAS PARA LOG
-# ==============================================================================
-
 def formatar_estrategias(resultado):
-
     partes = []
-
-    nomes = {
-        "SOMA5_36": "Soma5≥36",
-        "ALTOS5_4": "4/5 Altos",
-        "GG_R": "GG→R",
-        "V_G": "V→G",
-        "ALTOS3_2": "2/3 Altos"
-    }
-
     for estrategia, sinal in resultado["sinais"].items():
-
-        nome = nomes.get(
-            estrategia,
-            estrategia
-        )
-
-        if sinal:
-
-            partes.append(
-                f"{nome}={sinal}"
-            )
-
-        else:
-
-            partes.append(
-                f"{nome}=—"
-            )
-
+        motivo = resultado["motivos"].get(estrategia, "")
+        partes.append(f"V3={sinal or '—'} ({motivo})")
     return " | ".join(partes)
 
 
-# ==============================================================================
 # LOOP PRINCIPAL DO BOT
 # ==============================================================================
 
@@ -1059,7 +809,7 @@ def bot_loop():
                 else:
 
                     # ----------------------------------------------------------
-                    # CALCULA CONFLUÊNCIA ANTES DE ADICIONAR O NOVO RESULTADO
+                    # CALCULA V3 ANTES DE ADICIONAR O NOVO RESULTADO
                     # ----------------------------------------------------------
 
                     if len(history_numbers) >= 3:
@@ -1123,7 +873,7 @@ def bot_loop():
 
                             add_log(
                                 f"{cor_sinal} "
-                                f"🚨 CONFLUÊNCIA "
+                                f"🚨 V3 "
                                 f"{confluencia}/"
                                 f"{TOTAL_ESTRATEGIAS} 🚨"
                             )
@@ -1188,7 +938,7 @@ def bot_loop():
                         else:
 
                             # --------------------------------------------------
-                            # NÃO HOUVE CONFLUÊNCIA
+                            # NÃO HOUVE V3
                             # --------------------------------------------------
 
                             votos_r = (
@@ -1933,7 +1683,7 @@ body {
 
         <div class="logo-text">
 
-            🤖 Bot Confluência
+            🤖 Bot V3
 
         </div>
 
@@ -2165,7 +1915,7 @@ body {
 
                 <div class="status-hunting">
 
-                    CAÇANDO CONFLUÊNCIA
+                    CAÇANDO V3
 
                 </div>
 
@@ -2211,7 +1961,7 @@ body {
                     </div>
 
 
-                {% elif 'CONFLUÊNCIA' in line
+                {% elif 'V3' in line
                       or '🟣' in line
                       or '🟢' in line
                       or '🔴' in line %}
